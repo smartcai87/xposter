@@ -1,6 +1,6 @@
 {
   "name": "xposter",
-  "version": "0.1.39",
+  "version": "0.1.42",
   "description": "Chrome MV3 extension for importing Markdown drafts into X Articles.",
   "license": "MIT",
   "type": "commonjs",
@@ -14,7 +14,7 @@
   ],
   "scripts": {
     "check": "node --check src/background.js && node --check src/content.js && node --check src/main-world.js && node --check src/shared.js && node --check sidepanel.js && node --check diagnostics.js && jq empty manifest.json",
-    "test": "node scripts/smoke-test.js",
+    "test": "node scripts/smoke-test.js && node scripts/cover-flow-test.js",
     "verify": "npm run check && npm test"
   },
   "repository": {

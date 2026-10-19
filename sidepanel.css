@@ -3173,3 +3173,57 @@ textarea::placeholder {
     grid-template-columns: 1fr;
   }
 }
+
+/* The main workflow is a draft and one publish action. Diagnostics stay in Settings. */
+.quick-steps-panel,
+.workflow-rail,
+.live-gate,
+.command-dock,
+.next-action,
+.assurance-strip,
+.draft-explainer,
+.readiness,
+.remote-permissions,
+#dockCheck,
+.action-label {
+  display: none;
+}
+
+#loadFile {
+  min-height: 36px;
+  padding: 8px 12px;
+}
+
+.publish-error {
+  border: 1px solid var(--danger);
+  border-left-width: 4px;
+  background: var(--paper);
+  padding: 14px;
+  min-width: 0;
+}
+
+.publish-error[hidden] {
+  display: none;
+}
+
+.publish-error h2 {
+  color: var(--danger);
+  font-size: 16px;
+  margin: 0;
+}
+
+.publish-error pre {
+  max-height: 280px;
+  overflow: auto;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  user-select: text;
+  font-size: 12px;
+  line-height: 1.6;
+  margin: 12px 0 0;
+}
+
+#copyErrorFeedback {
+  color: var(--muted);
+  font-size: 12px;
+}

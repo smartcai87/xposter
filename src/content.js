@@ -281,6 +281,14 @@
         error.mainSummary = mainSummary;
         throw error;
       }
+      if (mainSummary?.cover?.requested &&
+          (!mainSummary.cover.graphql?.ok || !mainSummary.cover.bodyBlockDeleted?.ok)) {
+        const detail = mainSummary.cover.graphql?.error || mainSummary.cover.bodyBlockDeleted?.error ||
+          mainSummary.cover.skippedReason || "Cover could not be confirmed";
+        const error = new Error(`The article body was written, but cover setup did not finish: ${detail}. Review the draft in X before retrying.`);
+        error.mainSummary = mainSummary;
+        throw error;
+      }
       const elapsedMs = Math.round(performance.now() - startedAt);
       const summary = {
         ok: true,
@@ -301,7 +309,7 @@
       const message = error?.message || String(error);
       showStatus(message, "error", 8000);
       broadcast({ type: "error", error: message, mediaFailures: error?.mediaFailures || null, mainSummary: error?.mainSummary || null });
-      return { ok: false, error: message };
+      return { ok: false, error: message, mediaFailures: error?.mediaFailures || null, mainSummary: error?.mainSummary || null };
     } finally {
       state.busy = false;
     }
@@ -321,9 +329,16 @@
     }
   }
 
-  function promptVaultSelection(count = 0) {
+  function promptVaultSelection(count = 0, language = "en") {
+    if (typeof window.showDirectoryPicker !== "function") {
+      return Promise.resolve({ ok: false, error: "Directory picker is unavailable. Open the X article in Chrome and try again." });
+    }
+    const zh = language === "zh";
     return new Promise((resolve) => {
-      document.getElementById("__xposter_vault_prompt__")?.remove();
+      if (document.getElementById("__xposter_vault_prompt__")) {
+        resolve({ ok: false, error: "An image folder dialog is already open on the X page." });
+        return;
+      }
       const overlay = document.createElement("div");
       overlay.id = "__xposter_vault_prompt__";
       overlay.style.cssText = [
@@ -337,6 +352,9 @@
       ].join(";");
 
       const panel = document.createElement("div");
+      panel.setAttribute("role", "dialog");
+      panel.setAttribute("aria-modal", "true");
+      panel.setAttribute("aria-label", zh ? "选择图片文件夹" : "Local image folder");
       panel.style.cssText = [
         "width:min(440px,calc(100vw - 40px))",
         "background:#fbfaf7",
@@ -346,25 +364,43 @@
         "padding:22px"
       ].join(";");
       panel.innerHTML = `
-        <div style="font-size:17px;font-weight:760;margin-bottom:6px;">Local image folder</div>
+        <div style="font-size:17px;font-weight:760;margin-bottom:6px;">${zh ? "选择图片文件夹" : "Local image folder"}</div>
         <div style="color:#6b665e;margin-bottom:14px;">${shared.escapeHtml(
-          count ? `${count} local image(s) need a root folder.` : "Choose the folder that contains your Markdown images."
+          zh
+            ? (count ? `这篇文章包含 ${count} 张本地图片，请选择图片的根文件夹。` : "请选择包含 Markdown 图片的文件夹。")
+            : (count ? `${count} local image(s) need a root folder.` : "Choose the folder that contains your Markdown images.")
         )}</div>
         <div style="background:#f4f0e8;border:1px solid #d8d2c6;padding:10px 12px;color:#6b665e;font-size:12px;margin-bottom:16px;">
-          If your Markdown says <code>![](./img/cover.png)</code>, choose the folder that contains the <code>img</code> directory.
+          ${zh
+            ? '例如图片路径是 <code>./img/cover.png</code>，请选择包含 <code>img</code> 的上级文件夹。选择后会自动继续，取消则停止本次发布。'
+            : 'For <code>./img/cover.png</code>, choose the folder containing <code>img</code>. Publishing continues after selection. Cancel to stop.'}
         </div>
         <div style="display:flex;justify-content:flex-end;gap:8px;">
-          <button id="xposter-vault-skip" style="height:36px;padding:0 13px;border:1px solid #d8d2c6;background:#fbfaf7;color:#201f1b;font:inherit;font-weight:700;cursor:pointer;">Skip</button>
-          <button id="xposter-vault-pick" style="height:36px;padding:0 14px;border:0;background:#2f6f68;color:#fbfaf7;font:inherit;font-weight:760;cursor:pointer;">Choose folder</button>
+          <button id="xposter-vault-skip" style="height:36px;padding:0 13px;border:1px solid #d8d2c6;background:#fbfaf7;color:#201f1b;font:inherit;font-weight:700;cursor:pointer;">${zh ? "取消" : "Cancel"}</button>
+          <button id="xposter-vault-pick" style="height:36px;padding:0 14px;border:0;background:#2f6f68;color:#fbfaf7;font:inherit;font-weight:760;cursor:pointer;">${zh ? "选择文件夹" : "Choose folder"}</button>
         </div>
       `;
       overlay.appendChild(panel);
       document.body.appendChild(overlay);
 
+      const previousFocus = document.activeElement;
+      const onKeyDown = (event) => {
+        if (event.key === "Escape") { event.preventDefault(); finish({ ok: false, skipped: true }); }
+        if (event.key === "Tab") {
+          event.preventDefault();
+          const pick = panel.querySelector("#xposter-vault-pick");
+          const skip = panel.querySelector("#xposter-vault-skip");
+          (document.activeElement === pick ? skip : pick).focus();
+        }
+      };
       const finish = (value) => {
+        document.removeEventListener("keydown", onKeyDown, true);
         overlay.remove();
+        previousFocus?.focus();
         resolve(value);
       };
+      document.addEventListener("keydown", onKeyDown, true);
+      panel.querySelector("#xposter-vault-pick").focus();
       panel.querySelector("#xposter-vault-skip").addEventListener("click", () => finish({ ok: false, skipped: true }));
       panel.querySelector("#xposter-vault-pick").addEventListener("click", async () => {
         try {
@@ -979,7 +1015,7 @@
       return false;
     }
     if (message?.type === "xposter:choose-vault") {
-      promptVaultSelection(0).then(sendResponse);
+      promptVaultSelection(message.count || 0, message.language || "en").then(sendResponse);
       return true;
     }
     if (message?.type === "xposter:clear-vault") {

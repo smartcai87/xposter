@@ -60,51 +60,23 @@ xPoster needs an open X Article tab because it fills the editor that is already 
 
 Open the xPoster side panel from the Chrome toolbar or side panel button.
 
-You should see:
-
-- A Markdown draft box.
-- A preview tab.
-- A **Check article** button.
-- An **Import** button.
-- A checklist showing what is ready and what is missing.
-
 ## 5. Load Your Draft
 
-Choose one:
+Paste Markdown, click **Choose Markdown file** to select a `.md` file, or use **Example**. Preview is optional.
 
-- Paste Markdown into the draft box.
-- Click the file button and select a `.md` file.
-- Click **Example** to load the built-in demo draft.
+## 6. Click Publish
 
-After the draft is loaded, xPoster previews the structure and shows warnings for anything it cannot handle yet.
+The main button stays labeled **Publish** once Markdown is loaded. One click checks the editor and media automatically, then fills the X draft.
 
-## 6. Check Before Import
+If local images use relative paths and no readable folder is configured, a dialog opens on the X page. For `./images/photo.png`, choose the parent of `images`. The flow continues after selection; cancelling stops before writing.
 
-Click **Check article**.
+Chrome asks for web image website access when needed. Downloads are checked automatically. Text-only drafts do not require a folder. Tables become images and still require X media uploads.
 
-xPoster checks:
+## 7. Errors
 
-- Is the active tab X or Twitter?
-- Is it an X Articles page?
-- Can the content script talk to the page?
-- Can xPoster find the Draft.js editor?
-- Can xPoster find X's media upload handler?
-- Does the editor already contain text?
-- Are local image folder permissions ready?
+Errors appear below the Publish button. Click **Copy error** to copy the error and diagnostics for support. If clipboard access fails, the text is selected for manual copying. Advanced checks and records remain in **Settings**.
 
-If something is missing, follow the next action shown near the top of the side panel.
-
-## 7. Import
-
-Click **Import** only after the checklist is ready.
-
-xPoster will:
-
-1. Parse the Markdown.
-2. Prepare images and rendered table images.
-3. Paste supported text into the X editor.
-4. Replace xPoster markers with images, tables, tweets, code blocks, or dividers.
-5. Save a result record in the side panel.
+The extension's **Publish** button fills an X draft. You still make it public using X's own Publish button.
 
 ## 8. Review In X
 

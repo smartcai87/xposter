@@ -2,6 +2,10 @@
   const shared = window.xPosterShared;
   const IMPORT_ICON_SVG = '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 4h16v3H4V4Zm0 5h10v3H4V9Zm0 5h8v3H4v-3Zm13.5-.7V9h2v4.3l1.6-1.6 1.4 1.4-3.5 3.5-3.5-3.5 1.4-1.4 1.6 1.6ZM17 18h5v2h-5v-2Z"/></svg>';
   const els = {
+    publishError: document.getElementById("publishError"),
+    publishErrorText: document.getElementById("publishErrorText"),
+    copyPublishError: document.getElementById("copyPublishError"),
+    copyErrorFeedback: document.getElementById("copyErrorFeedback"),
     markdown: document.getElementById("markdown"),
     pageState: document.getElementById("pageState"),
     quickSteps: document.getElementById("quickSteps"),
@@ -224,6 +228,9 @@ https://x.com/Interior/status/463440424141459456
 \`\`\`js
 console.log("示例代码块");
 \`\`\``;
+  let publishing = false;
+  let publishMessage = "";
+  let publishErrorReport = "";
   let latestParsed = null;
   let latestCounts = shared.segmentCounts([]);
   let latestPageStatus = null;
@@ -1195,6 +1202,27 @@ console.log("示例代码块");
       Failed: "失败",
       Waiting: "等待",
       Hidden: "隐藏",
+      "X media upload handler was not found (hasOnFilesAdded=false). Refresh the X editor; this xPoster version may need an update for the current X editor.": "未找到 X 的图片上传接口（hasOnFilesAdded=false）。请刷新 X 文章编辑器后重试；若仍失败，此版本可能需要适配当前 X 编辑器。",
+      "X editor state was not found (hasDraftStateNode=false). Refresh the X editor; this xPoster version may need an update for the current X editor.": "未找到 X 编辑器状态（hasDraftStateNode=false）。请刷新 X 文章编辑器后重试；若仍失败，此版本可能需要适配当前 X 编辑器。",
+      "The active X tab changed while preparing the draft. Select the intended article and click Publish again.": "准备草稿期间切换了 X 标签页，请回到目标文章后重新点击发布。",
+      "Publish": "发布",
+      "Publishing...": "发布中…",
+      "Choose Markdown file": "导入本地文件",
+      "Paste Markdown or choose a file, then click Publish.": "粘贴 Markdown 或导入本地文件，然后点击发布。",
+      "Checks run automatically. Review and publish the finished draft in X.": "点击发布会自动检查并写入 X 草稿，最后在 X 中确认发布。",
+      "Ready to publish. Checks run automatically.": "草稿已就绪，点击发布即可自动检查并写入 X。",
+      "Checking the X article...": "正在检查 X 文章…",
+      "Choose the image folder in the dialog on the X page.": "请在 X 页面弹出的窗口中选择图片所在文件夹。",
+      "Checking images...": "正在检查图片…",
+      "Writing to X...": "正在写入 X 草稿…",
+      "Draft written to X. Review it in X and click Publish to make it public.": "已写入 X 草稿。请在 X 中检查内容，点击发布后才会公开。",
+      "Publish failed": "发布失败",
+      "Copy error": "复制错误信息",
+      "Copied": "已复制",
+      "Copy failed. Select and copy the error text below.": "复制失败，请选中下方错误内容手动复制。",
+      "Open an X Article draft before publishing.": "请先在 X 中新建或打开一篇文章草稿，再点击发布。",
+      "Image folder selection cancelled. Nothing was written to X.": "已取消选择图片文件夹，尚未写入 X。",
+      "Unable to verify the X editor. Refresh the X article and try again.": "无法检查 X 编辑器，请刷新 X 文章页面后重试。",
       More: "更多"
     })
   );
@@ -1811,7 +1839,7 @@ console.log("示例代码块");
   function remoteImagePermissionError(missingOrigins, requestError = "") {
     const origins = (missingOrigins || []).filter(Boolean).join(", ") || "the remote image site";
     const chromeDetail = requestError ? ` Chrome reported: ${requestError}.` : "";
-    return `Chrome has not allowed xPoster v${EXTENSION_VERSION} to read images from ${origins}.${chromeDetail} Click Allow image website in xPoster, choose Allow in Chrome's prompt, then click Check downloads and Import again. This is a browser permission step, not an X upload failure. Until Chrome allows this website, xPoster cannot fetch the image files, so Markdown image links will stay as text instead of becoming uploaded images in X. If Chrome did not show a prompt, open chrome://extensions, reload xPoster, reopen the X Article tab and the side panel, then click Allow image website again.`;
+    return `Chrome has not allowed xPoster v${EXTENSION_VERSION} to read images from ${origins}.${chromeDetail} Click Publish again and allow the image website in Chrome's prompt. If no prompt appears, reload xPoster in chrome://extensions and reopen the side panel.`;
   }
 
   function originalImporterResidueStatus() {
@@ -2143,6 +2171,8 @@ console.log("示例代码块");
   }
 
   function analyzeDraft() {
+    publishMessage = "";
+    clearPublishError();
     const markdown = els.markdown.value;
     if (!markdown.trim()) {
       latestParsed = null;
@@ -2182,6 +2212,10 @@ console.log("示例代码块");
       updatePreflight();
       updateProgressiveSections();
     } catch (error) {
+      latestParsed = null;
+      latestCounts = shared.segmentCounts([]);
+      updatePreflight();
+      showPublishError(error);
       log(`Could not analyze draft: ${error?.message || error}`);
     }
   }
@@ -2968,10 +3002,10 @@ console.log("示例代码块");
     if (els.importDraft?.closest(".actions")) {
       els.importDraft.closest(".actions").dataset.empty = latestParsed?.segments?.length ? "false" : "true";
     }
-    applyPrimaryActionToImportButton(nextAction);
+    updatePublishAction();
     updateSecondaryActions(nextAction);
-    els.importHint.textContent = nextAction.detail;
-    els.importHint.dataset.tone = nextAction.tone;
+    els.importHint.textContent = publishMessage || (latestParsed?.segments?.length ? "Ready to publish. Checks run automatically." : "Paste Markdown or choose a file, then click Publish.");
+    els.importHint.dataset.tone = publishErrorReport ? "error" : publishing ? "warn" : "ready";
     updateWorkflowRail(checks);
     updateLiveRunbook(checks, gate);
     updateNextAction(checks, gate);
@@ -2999,14 +3033,77 @@ console.log("示例代码块");
   }
 
   function runImportButtonAction() {
+    return importDraft();
+  }
+
+  function updatePublishAction() {
+    setImportButtonLabel(publishing ? "Publishing..." : "Publish");
+    els.importDraft.disabled = publishing || !latestParsed?.segments?.length;
+    els.importDraft.setAttribute("aria-busy", String(publishing));
+    els.markdown.disabled = publishing;
+    for (const button of [els.loadFile, els.loadSmoke, els.clearDraft, els.pickVault,
+      els.pickVaultSettings, els.clearVault, els.clearVaultSettings, els.runPreflight,
+      els.allowRemoteImages, els.checkRemoteImages, els.openArticles]) {
+      if (button) {
+        if (publishing) {
+          if (!button.hasAttribute("data-publish-disabled")) button.dataset.publishDisabled = String(button.disabled);
+          button.disabled = true;
+        } else if (button.hasAttribute("data-publish-disabled")) {
+          button.disabled = button.dataset.publishDisabled === "true";
+          delete button.dataset.publishDisabled;
+        }
+      }
+    }
+    if (!publishing) setVaultClearEnabled(Boolean(currentVault()?.configured));
+  }
+
+  function clearPublishError() {
+    publishErrorReport = "";
+    els.publishError.hidden = true;
+    els.publishErrorText.textContent = "";
+    els.copyErrorFeedback.textContent = "";
+    els.copyPublishError.textContent = "Copy error";
+  }
+
+  function showPublishError(error, details = {}) {
+    const message = error?.message || String(error || "Unknown error");
     const checks = buildPreflightChecks();
-    const gate = getImportGate(checks);
-    const action = primaryImportAction(gate);
-    if (action.action === "allowRemoteImages") return runRemotePermissionAction();
-    if (action.action === "checkRemoteImages") return runRemoteImageCheckAction();
-    if (action.action === "import") return importDraft();
-    log(gate.message || "Import is not ready yet.");
-    return null;
+    publishErrorReport = JSON.stringify({
+      error: message,
+      version: EXTENSION_VERSION,
+      time: new Date().toISOString(),
+      stage: publishMessage,
+      checks,
+      diagnostics: latestDiagnostics,
+      remoteImages: remoteImageProbeStatus,
+      ...details
+    }, jsonSafeReplacer, 2);
+    // Keep the raw technical message intact for copying and support.
+    els.publishErrorText.textContent = `${message}\n\n${publishErrorReport}`;
+    els.publishError.hidden = false;
+    els.copyPublishError.textContent = "Copy error";
+    translateDynamicDom(els.publishError);
+    els.publishError.scrollIntoView({ block: "nearest", behavior: "smooth" });
+  }
+
+  async function copyPublishError() {
+    try {
+      await navigator.clipboard.writeText(els.publishErrorText.textContent);
+      els.copyErrorFeedback.textContent = "Copied";
+    } catch {
+      els.copyErrorFeedback.textContent = "Copy failed. Select and copy the error text below.";
+      const range = document.createRange();
+      range.selectNodeContents(els.publishErrorText);
+      const selection = window.getSelection();
+      selection.removeAllRanges();
+      selection.addRange(range);
+    }
+    translateDynamicDom(els.publishError);
+  }
+
+  function setPublishMessage(message) {
+    publishMessage = message;
+    updatePreflight();
   }
 
   function setImportButtonLabel(label) {
@@ -3014,22 +3111,9 @@ console.log("示例代码块");
     els.importDraft.innerHTML = `${svg}${shared.escapeHtml(label)}`;
   }
 
-  function applyPrimaryActionToImportButton(action) {
-    if (!action) return;
-    const enabled = action.action && action.action !== "blocked" && !action.disabled;
-    els.importDraft.disabled = !enabled;
-    setImportButtonLabel(action.button || "Import");
-  }
-
-  function updateSecondaryActions(primaryAction = currentNextAction) {
-    const primary = primaryAction?.action || "";
-    const focusOnly = new Set(["loadFile", "allowRemoteImages", "checkRemoteImages"]);
-    if (els.openArticles) {
-      els.openArticles.hidden = focusOnly.has(primary) || primary === "openArticles";
-    }
-    if (els.dockCheck) {
-      els.dockCheck.hidden = focusOnly.has(primary) || primary === "check";
-    }
+  function updateSecondaryActions() {
+    els.openArticles.hidden = false;
+    els.dockCheck.hidden = true;
   }
 
   function applyImportActionToButton(button, action) {
@@ -3191,7 +3275,7 @@ console.log("示例代码块");
     els.dockDetail.textContent = detail;
     els.dockMeterBar.style.width = `${readiness}%`;
     els.dockCheck.textContent = "Check article";
-    applyImportActionToButton(els.dockImport, primaryImportAction(resolvedGate));
+    applyImportActionToButton(els.dockImport, { label: publishing ? "Publishing..." : "Publish", enabled: !publishing && Boolean(latestParsed?.segments?.length) });
     els.dockEvidence.dataset.ready = liveResult.complete ? "true" : "false";
     translateDynamicDom(els.commandDock);
   }
@@ -4245,7 +4329,14 @@ console.log("示例代码块");
     const eventName = message.event || payload.type || "message";
     if (payload.text) log(progressTextForEvent("status", payload));
     if (eventName === "complete") log("Import complete.");
-    if (eventName === "error" && payload.error) log(`Import failed: ${payload.error}`);
+    if (eventName === "error" && payload.error) {
+      log(`Import failed: ${payload.error}`);
+      showPublishError(payload.error, { result: payload });
+    }
+    if (publishing && payload.text) {
+      publishMessage = payload.text;
+      els.importHint.textContent = localizeText(payload.text);
+    }
     recordLiveProgressEvent(eventName, payload);
   }
 
@@ -4654,11 +4745,13 @@ console.log("示例代码块");
         scrollTargetIntoView(els.previewPanel);
       },
       check: () => {
+        showWorkspacePanel("settings");
         openDetailsFor(els.preflightPanel);
         scrollTargetIntoView(els.preflightPanel);
       },
-      verify: () => scrollTargetIntoView(els.verificationPanel),
+      verify: () => { showWorkspacePanel("settings"); scrollTargetIntoView(els.verificationPanel); },
       evidence: () => {
+        showWorkspacePanel("settings");
         openDetailsFor(els.evidencePanel);
         scrollTargetIntoView(els.evidencePanel);
       }
@@ -4738,122 +4831,87 @@ console.log("示例代码块");
     return { ok: true, checks, gate, targetContext };
   }
 
-  async function importDraft(event) {
+  async function importDraft() {
+    if (publishing) return;
     const markdown = els.markdown.value.trim();
-    if (!markdown) {
-      log("Paste or load Markdown first.");
-      return;
-    }
-    const parsed = ensureLatestParsedFromDraft();
-    updatePreflight();
-    let currentChecks = buildPreflightChecks();
-    let currentGate = getImportGate(currentChecks);
-    let currentImportAction = primaryImportAction(currentGate);
-    let pageScriptCheck = currentChecks.find((check) => check.id === "page-script");
-    if (pageScriptCheck?.tone === "error") {
-      log(pageScriptCheck.detail);
-      captureEvidence("page-script-blocked", {
-        reason: pageScriptCheck.detail,
-        originalImporterResidue: originalImporterResidueStatus(),
-        pageStatus: latestPageStatus,
-        diagnostics: latestDiagnostics
-      });
-      return;
-    }
-    if (currentImportAction.action === "allowRemoteImages") {
-      const permissionOutcome = await runRemotePermissionAction();
-      if (!permissionOutcome?.ok) return;
-    }
-    if (currentImportAction.action === "checkRemoteImages") {
-      const probeOutcome = await runRemoteImageCheckAction();
-      if (!probeOutcome?.ok) return;
-    }
-    await refreshRemotePermissionStatusBeforeAction(parsed);
-    updatePreflight();
-    currentChecks = buildPreflightChecks();
-    currentGate = getImportGate(currentChecks);
-    currentImportAction = primaryImportAction(currentGate);
-    pageScriptCheck = currentChecks.find((check) => check.id === "page-script");
-    if (pageScriptCheck?.tone === "error") {
-      log(pageScriptCheck.detail);
-      captureEvidence("page-script-blocked", {
-        reason: pageScriptCheck.detail,
-        originalImporterResidue: originalImporterResidueStatus(),
-        pageStatus: latestPageStatus,
-        diagnostics: latestDiagnostics
-      });
-      return;
-    }
-    if (currentImportAction.action === "allowRemoteImages" || currentImportAction.action === "checkRemoteImages") {
-      log(currentGate.message);
-      captureEvidence("remote-image-preflight-blocked", {
-        reason: currentGate.message,
-        permission: remotePermissionStatus,
-        probe: remoteImageProbeStatus,
-        pageStatus: latestPageStatus,
-        diagnostics: latestDiagnostics
-      });
-      return;
-    }
-    const imagePermissions = await ensureRemoteImagePermissionsForDraft(parsed);
-    if (!imagePermissions.ok) {
-      log(imagePermissions.error);
-      captureEvidence("remote-image-permission-blocked", {
-        reason: imagePermissions.error,
-        origins: imagePermissions.origins,
-        missing: imagePermissions.missing || [],
-        pageStatus: latestPageStatus,
-        diagnostics: latestDiagnostics
-      });
-      return;
-    }
-    if (imagePermissions.origins?.length) {
-      await refreshRemoteImagePermissionStatus(parsed);
-    }
-    if (remoteHttpImageSegments(parsed).length && !remoteImageProbeReady(parsed)) {
-      const probe = await probeRemoteImagesForDraft(parsed);
-      if (!probe.ok) {
-        log(`Remote image check failed before import: ${probe.error}.`);
-        captureEvidence("remote-image-check-blocked", {
-          result: probe,
-          permission: remotePermissionStatus,
-          probe: remoteImageProbeStatus,
-          pageStatus: latestPageStatus,
-          diagnostics: latestDiagnostics
-        });
-        return;
+    if (!markdown) return;
+    publishing = true;
+    clearPublishError();
+    setPublishMessage("Checking the X article...");
+    let result = null;
+    try {
+      const parsed = shared.parseMarkdown(markdown);
+      latestParsed = parsed;
+      latestCounts = shared.segmentCounts(parsed.segments);
+      // Request image-site access directly from the Publish click so Chrome
+      // retains the user gesture. Downloads and editor checks follow automatically.
+      const permissions = await ensureRemoteImagePermissionsForDraft(parsed, { requestImmediately: true });
+      if (!permissions.ok) throw new Error(permissions.error);
+      const targetTab = await activeTab();
+      await runPreflight();
+      if (!latestDiagnostics?.ok) {
+        throw new Error(latestDiagnostics?.error || localizeText("Unable to verify the X editor. Refresh the X article and try again."));
       }
-      log(`Remote image check passed for ${probe.total} image(s).`);
+      if (!latestPageStatus?.isArticleRoute || !latestPageStatus?.hasEditor) {
+        throw new Error(localizeText("Open an X Article draft before publishing."));
+      }
+      if (!latestDiagnostics?.main?.ok) {
+        throw new Error(latestDiagnostics?.error || latestDiagnostics?.main?.error ||
+          localizeText("Unable to verify the X editor. Refresh the X article and try again."));
+      }
+      const folderNeeded = localImageSegments(parsed).length &&
+        (!currentVault()?.configured || currentVault()?.permission !== "granted");
+      if (folderNeeded) {
+        setPublishMessage("Choose the image folder in the dialog on the X page.");
+        const selection = await sendToActiveTab({
+          type: "xposter:choose-vault", count: localImageSegments(parsed).length, language: currentLanguage
+        });
+        if (!selection?.ok) {
+          throw new Error(selection?.error || localizeText("Image folder selection cancelled. Nothing was written to X."));
+        }
+        await refreshPageState();
+      }
+      setPublishMessage("Checking images...");
+      if (remoteHttpImageSegments(parsed).length) {
+        const probe = await probeRemoteImagesForDraft(parsed);
+        if (!probe.ok) throw new Error(probe.error);
+      }
+      // Re-read the active target after dialogs/downloads. A changed article
+      // must fail the existing target lock instead of receiving this draft.
+      const target = await prepareImportTarget();
+      if (!target.ok) {
+        const blockers = target.checks.filter((check) => check.tone !== "ok" &&
+          ["draft", "target", "page-script", "target-lock", "plan", "assets", "remote-images"].includes(check.id));
+        if ((latestCounts.image || latestCounts.table) && !latestDiagnostics?.main?.hasOnFilesAdded) {
+          blockers.push({ detail: "X media upload handler was not found (hasOnFilesAdded=false). Refresh the X editor; this xPoster version may need an update for the current X editor." });
+        }
+        if ((latestCounts.code || latestCounts.tweet || latestCounts.divider) && !latestDiagnostics?.main?.hasDraftStateNode) {
+          blockers.push({ detail: "X editor state was not found (hasDraftStateNode=false). Refresh the X editor; this xPoster version may need an update for the current X editor." });
+        }
+        throw new Error(blockers.map((check) => localizeText(check.detail)).join("\n") || target.gate.message);
+      }
+      setPublishMessage("Writing to X...");
+      resetLiveProgress("import");
+      const activeTarget = await activeTab();
+      if (!targetTab?.id || activeTarget?.id !== targetTab.id) {
+        throw new Error(localizeText("The active X tab changed while preparing the draft. Select the intended article and click Publish again."));
+      }
+      result = await chrome.tabs.sendMessage(targetTab.id, { type: "xposter:import-markdown", markdown });
+      if (!result?.ok) throw new Error(result?.error || "X import returned no result");
+      if (latestProgress.state !== "complete") recordLiveProgressEvent("complete", { summary: result.summary });
+      renderRunSummary(result.summary);
+      captureEvidence("import", { result, targetContext: target.targetContext, pageStatus: latestPageStatus, diagnostics: latestDiagnostics });
+      publishMessage = "Draft written to X. Review it in X and click Publish to make it public.";
+    } catch (error) {
+      log(`Import failed: ${error?.message || error}`);
+      recordLiveProgressEvent("error", { error: error?.message || String(error) });
+      captureEvidence("import-error", { error: error?.message || String(error), result });
+      showPublishError(error, { result });
+      publishMessage = "Publish failed";
+    } finally {
+      publishing = false;
+      updatePreflight();
     }
-    const target = await prepareImportTarget();
-    if (!target.ok) {
-      log(target.gate.message);
-      captureEvidence("preflight-blocked", {
-        reason: target.gate.message,
-        targetContext: target.targetContext,
-        pageStatus: latestPageStatus,
-        diagnostics: latestDiagnostics
-      });
-      return;
-    }
-    els.importDraft.disabled = true;
-    els.importDraft.textContent = "Importing...";
-    resetLiveProgress("import");
-    log("Import started.");
-    const response = await sendToActiveTab({ type: "xposter:import-markdown", markdown });
-    if (response?.ok) {
-      const seconds = ((response.summary?.elapsedMs || 0) / 1000).toFixed(1);
-      log(`Import complete in ${seconds}s.`);
-      if (latestProgress.state !== "complete") recordLiveProgressEvent("complete", { summary: response.summary });
-      renderRunSummary(response.summary);
-      captureEvidence("import", { result: response, targetContext: target.targetContext, pageStatus: latestPageStatus, diagnostics: latestDiagnostics });
-    } else {
-      log(`Import failed: ${response?.error || "unknown error"}`);
-      if (latestProgress.state !== "error") recordLiveProgressEvent("error", { error: response?.error || "unknown error" });
-      captureEvidence("import-error", { result: response, targetContext: target.targetContext, pageStatus: latestPageStatus, diagnostics: latestDiagnostics });
-    }
-    updatePreflight();
-    refreshPageState();
   }
 
   function renderRunSummary(summary) {
@@ -4985,10 +5043,14 @@ console.log("示例代码块");
       const file = input.files?.[0];
       input.remove();
       if (!file) return;
-      els.markdown.value = await file.text();
-      saveDraft();
-      analyzeDraft();
-      log(`Loaded ${file.name}.`);
+      try {
+        els.markdown.value = await file.text();
+        saveDraft();
+        analyzeDraft();
+        log(`Loaded ${file.name}.`);
+      } catch (error) {
+        showPublishError(error, { fileName: file.name });
+      }
     });
     input.click();
   }
@@ -5075,24 +5137,31 @@ console.log("示例代码块");
     els.runPreflight.disabled = true;
     els.runPreflight.textContent = "Checking...";
     log("Publishing check started.");
-    await refreshPageState();
-    const response = await sendToActiveTab({ type: "xposter:diagnostics" });
-    latestDiagnostics = response?.ok ? response : { ok: false, error: response?.error || "Diagnostics unavailable" };
-    await refreshRemoteImagePermissionStatus(latestParsed);
-    const locked = response?.ok ? lockTargetContext("preflight") : null;
-    if (locked) log(`Article confirmed: ${locked.context.articleId ? `article ${locked.context.articleId}` : "the open X Article"}.`);
-    updatePreflight();
-    captureEvidence("preflight", {
-      checks: buildPreflightChecks(),
-      targetLock,
-      pageStatus: latestPageStatus,
-      diagnostics: latestDiagnostics
-    });
-    const failing = buildPreflightChecks().filter((check) => check.tone === "error");
-    if (failing.length) log(`Publishing check found ${failing.length} blocker(s).`);
-    else log("Publishing check passed without blockers.");
-    els.runPreflight.disabled = false;
-    els.runPreflight.textContent = "Check";
+    try {
+      await refreshPageState();
+      const response = await sendToActiveTab({ type: "xposter:diagnostics" });
+      latestDiagnostics = response?.ok ? response : { ok: false, error: response?.error || "Diagnostics unavailable" };
+      await refreshRemoteImagePermissionStatus(latestParsed);
+      const locked = response?.ok ? lockTargetContext("preflight") : null;
+      if (locked) log(`Article confirmed: ${locked.context.articleId ? `article ${locked.context.articleId}` : "the open X Article"}.`);
+      updatePreflight();
+      captureEvidence("preflight", {
+        checks: buildPreflightChecks(),
+        targetLock,
+        pageStatus: latestPageStatus,
+        diagnostics: latestDiagnostics
+      });
+      const failing = buildPreflightChecks().filter((check) => check.tone === "error");
+      if (failing.length) log(`Publishing check found ${failing.length} blocker(s).`);
+      else log("Publishing check passed without blockers.");
+      return latestDiagnostics;
+    } catch (error) {
+      if (publishing) throw error;
+      showPublishError(error);
+    } finally {
+      els.runPreflight.disabled = publishing;
+      els.runPreflight.textContent = "Check";
+    }
   }
 
   function captureEvidence(kind, payload) {
@@ -5479,7 +5548,7 @@ console.log("示例代码块");
         await runRemoteImageCheckAction();
         break;
       case "import":
-        await importDraft();
+        await runImportButtonAction();
         break;
       case "liveResult":
         scrollTargetIntoView(els.liveResultList, "center");
@@ -5522,7 +5591,7 @@ console.log("示例代码块");
         await runRemoteImageCheckAction();
         break;
       case "import":
-        await importDraft();
+        await runImportButtonAction();
         break;
       case "liveResult":
         scrollTargetIntoView(els.liveResultList, "center");
@@ -5558,6 +5627,7 @@ console.log("示例代码块");
     analyzeDraft();
   });
   els.importDraft.addEventListener("click", runImportButtonAction);
+  els.copyPublishError.addEventListener("click", copyPublishError);
   els.allowRemoteImages?.addEventListener("click", () => runRemotePermissionAction());
   els.checkRemoteImages?.addEventListener("click", () => runRemoteImageCheckAction());
   els.nextActionButton?.addEventListener("click", runNextAction);
@@ -5619,11 +5689,17 @@ console.log("示例代码块");
     });
   });
 
+  const settingsPanel = document.querySelector('[data-panel="settings"]');
+  for (const section of [els.advancedDiagnostics, els.runSummary, els.verificationPanel,
+    els.liveResultPanel, els.evidenceDetails, els.activityPanel]) {
+    settingsPanel.appendChild(section);
+  }
+
   restoreDraft();
   restoreVaultState();
   restoreLiveResultChecks();
   updateLiveProgress();
   refreshPageState();
   restoreLanguage();
-  window.setInterval(refreshPageState, 2500);
+  window.setInterval(() => { if (!publishing) refreshPageState(); }, 2500);
 })();

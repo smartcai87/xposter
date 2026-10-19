@@ -43,11 +43,9 @@ Use the source install only if you want to inspect or modify the extension yours
 1. Open or create an X Article at `https://x.com/compose/articles`.
 2. Open the xPoster side panel.
 3. Paste Markdown into the draft box, choose a Markdown file, or click **Example**.
-4. Check the preview and the issue list.
-5. Click **Check article** so xPoster can confirm the active X Article tab is reachable.
-6. Click **Import**.
-7. Review the article inside X.
-8. Click X's own Publish button only when the article looks right.
+4. Click **Publish**. xPoster checks the editor and images, then writes the draft into X. If a local image folder is missing, choose it in the dialog on the X page; the flow continues automatically.
+5. Errors appear below the button. Click **Copy error** to copy the message and diagnostics.
+6. Review the article inside X, then click X's own Publish button to make it public.
 
 ## What Markdown Works
 
