@@ -372,8 +372,8 @@
         )}</div>
         <div style="background:#f4f0e8;border:1px solid #d8d2c6;padding:10px 12px;color:#6b665e;font-size:12px;margin-bottom:16px;">
           ${zh
-            ? '例如图片路径是 <code>./img/cover.png</code>，请选择包含 <code>img</code> 的上级文件夹。选择后会自动继续，取消则停止本次发布。'
-            : 'For <code>./img/cover.png</code>, choose the folder containing <code>img</code>. Publishing continues after selection. Cancel to stop.'}
+            ? '图片路径从所选文件夹开始查找，开头的 <code>../</code> 会自动忽略。例如 <code>40_Assets/cover.png</code>，应选择 <code>40_Assets</code> 的上级目录，不要再选进 <code>40_Assets</code>；若路径只有 <code>cover.png</code>，则选择图片所在目录。选择后会自动继续，取消则停止本次发布。'
+            : 'Paths start from the selected folder; leading <code>../</code> is ignored. For <code>40_Assets/cover.png</code>, select the parent of <code>40_Assets</code>, not <code>40_Assets</code> itself. For <code>cover.png</code>, select the folder containing the image. Publishing continues after selection. Cancel to stop.'}
         </div>
         <div style="display:flex;justify-content:flex-end;gap:8px;">
           <button id="xposter-vault-skip" style="height:36px;padding:0 13px;border:1px solid #d8d2c6;background:#fbfaf7;color:#201f1b;font:inherit;font-weight:700;cursor:pointer;">${zh ? "取消" : "Cancel"}</button>

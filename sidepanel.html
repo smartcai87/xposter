@@ -153,6 +153,19 @@
             </button>
           </div>
         </div>
+        <details class="image-path-tips">
+          <summary>Local image path tips</summary>
+          <p>Image paths are resolved from the folder you select, not from the Markdown file.</p>
+          <dl>
+            <dt><code>../40_Assets/cover.png</code></dt>
+            <dd>Leading ../ is ignored. Select the parent of 40_Assets.</dd>
+            <dt><code>40_Assets/cover.png</code></dt>
+            <dd>Select the parent of 40_Assets.</dd>
+            <dt><code>cover.png</code></dt>
+            <dd>Select the folder containing cover.png.</dd>
+          </dl>
+          <p>If the path already starts with 40_Assets/, do not select 40_Assets again. Change the image folder in Settings.</p>
+        </details>
         <div class="draft-explainer" aria-label="Draft editor note">
           <strong>Raw Markdown stays here</strong>
           <span>This box always keeps the original Markdown text. Use Preview to see recognized images and links; images appear in X only after approval, download check, and Import.</span>
@@ -911,6 +924,7 @@
           <div>
             <strong>Local image folder</strong>
             <span id="vaultSettingsText">Choose the folder that contains relative image paths in your Markdown.</span>
+            <span class="image-path-setting-tip">For 40_Assets/cover.png, select the parent of 40_Assets, not 40_Assets itself.</span>
           </div>
           <div class="button-cluster">
             <button class="secondary compact" id="pickVaultSettings">Choose</button>

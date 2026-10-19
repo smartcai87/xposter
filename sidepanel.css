@@ -3227,3 +3227,41 @@ textarea::placeholder {
   color: var(--muted);
   font-size: 12px;
 }
+
+
+.image-path-tips {
+  padding: 10px 14px;
+  border-bottom: 1px solid var(--line);
+  background: var(--paper-2);
+  font-size: 12px;
+  line-height: 1.6;
+  color: var(--muted);
+}
+
+.image-path-tips summary {
+  color: var(--signal);
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.image-path-tips p {
+  margin: 8px 0 0;
+}
+
+.image-path-tips dl {
+  margin: 10px 0;
+}
+
+.image-path-tips dt {
+  color: var(--ink);
+  overflow-wrap: anywhere;
+}
+
+.image-path-tips dd {
+  margin: 0 0 8px;
+}
+
+.setting-row .image-path-setting-tip {
+  margin-top: 6px;
+  color: var(--signal);
+}

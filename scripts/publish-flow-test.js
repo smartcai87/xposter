@@ -15,7 +15,7 @@ async function main() {
     const page = await context.newPage();
     const exceptions = [];
     page.on('pageerror', e => exceptions.push(e.message));
-    await page.route('http://xposter.test/**', route => {
+    await page.route('https://xposter.test/**', route => {
       const file = path.join(root, new URL(route.request().url()).pathname);
       const type = file.endsWith('.js') ? 'text/javascript' : file.endsWith('.css') ? 'text/css' : 'text/html';
       return route.fulfill({ body: fs.readFileSync(file), contentType: type });
@@ -83,7 +83,7 @@ async function main() {
         }
       };
     }, { ...options, version });
-    await page.goto('http://xposter.test/sidepanel.html');
+    await page.goto('https://xposter.test/sidepanel.html');
     await page.waitForLoadState('networkidle');
     await page.locator('#languageSelect').selectOption('zh');
     await run(page);
@@ -269,6 +269,45 @@ async function main() {
         assert.equal(result.deleted, true);
       });
     }
+    await scenario('local image paths: rebase leading parents inside selected root', {}, async page => {
+      const results = await page.evaluate(async () => {
+        // Use a real browser-managed directory handle and IndexedDB, within
+        // this disposable origin. No user files or picker mocks are involved.
+        const storage = await navigator.storage.getDirectory();
+        const selected = await storage.getDirectoryHandle('selected-root', { create: true });
+        const images = await selected.getDirectoryHandle('40_Assets', { create: true });
+        const filename = '封面.png';
+        const file = await images.getFileHandle(filename, { create: true });
+        const writer = await file.createWritable();
+        await writer.write(new Uint8Array([1, 2, 3]));
+        await writer.close();
+        const outside = await storage.getFileHandle('outside.png', { create: true });
+        const outsideWriter = await outside.createWritable();
+        await outsideWriter.write('outside selected folder');
+        await outsideWriter.close();
+        await xPosterShared.saveVaultHandle(selected);
+        const sources = [
+          '40_Assets/封面.png', './40_Assets/封面.png',
+          '../40_Assets/封面.png', '../../40_Assets/封面.png',
+          './../40_Assets/封面.png', '..\\40_Assets\\封面.png',
+          '../40_Assets/%E5%B0%81%E9%9D%A2.png', '%2e%2e/40_Assets/封面.png',
+          '40_Assets/../outside.png', '../40_Assets/../../outside.png',
+          '../outside.png', '../', '/40_Assets/封面.png',
+          '..%2f40_Assets/封面.png', '../40_Assets/%2e%2e%2foutside.png'
+        ];
+        const results = [];
+        for (const source of sources) results.push({ source, result: await xPosterShared.resolveLocalImage(source) });
+        return results;
+      });
+      for (let i = 0; i < results.length; i++) {
+        const { source, result } = results[i];
+        if (i < 8) {
+          assert.equal(result.ok, true, source);
+          assert.equal(result.base64, 'AQID', source);
+          assert.equal(result.source, source, 'the original Markdown image reference stays unchanged');
+        } else assert.equal(result.ok, false, `must not read outside root or accept invalid path: ${source}`);
+      }
+    });
     console.log(`${passed} publish workflow scenarios passed`);
   } finally { await browser.close(); }
 }
