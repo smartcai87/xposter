@@ -1205,6 +1205,13 @@ console.log("示例代码块");
       "X media upload handler was not found (hasOnFilesAdded=false). Refresh the X editor; this xPoster version may need an update for the current X editor.": "未找到 X 的图片上传接口（hasOnFilesAdded=false）。请刷新 X 文章编辑器后重试；若仍失败，此版本可能需要适配当前 X 编辑器。",
       "X editor state was not found (hasDraftStateNode=false). Refresh the X editor; this xPoster version may need an update for the current X editor.": "未找到 X 编辑器状态（hasDraftStateNode=false）。请刷新 X 文章编辑器后重试；若仍失败，此版本可能需要适配当前 X 编辑器。",
       "The active X tab changed while preparing the draft. Select the intended article and click Publish again.": "准备草稿期间切换了 X 标签页，请回到目标文章后重新点击发布。",
+      "Leading ../ is ignored. Select the parent of 40_Assets.": "会自动忽略开头的 ../，选择 40_Assets 的上级目录即可，原 Markdown 不变。",
+      "Local image path tips": "本地图片路径怎么设置？",
+      "Image paths are resolved from the folder you select, not from the Markdown file.": "图片路径以你选择的文件夹为起点，不会自动以 Markdown 文件所在目录为起点。",
+      "Select the parent of 40_Assets.": "选择 40_Assets 的上级目录。",
+      "Select the folder containing cover.png.": "选择 cover.png 所在的目录。",
+      "If the path already starts with 40_Assets/, do not select 40_Assets again. Change the image folder in Settings.": "路径已包含 40_Assets/ 时，不要再选进 40_Assets，否则会重复拼接目录。已选错可到「设置 → 本地图片文件夹」重新选择。",
+      "For 40_Assets/cover.png, select the parent of 40_Assets, not 40_Assets itself.": "例如路径是 40_Assets/cover.png，请选择 40_Assets 的上级目录，不要选择 40_Assets 本身。",
       "Publish": "发布",
       "Publishing...": "发布中…",
       "Choose Markdown file": "导入本地文件",
@@ -5063,7 +5070,7 @@ console.log("示例代码块");
   }
 
   async function chooseVault() {
-    const response = await sendToActiveTab({ type: "xposter:choose-vault" });
+    const response = await sendToActiveTab({ type: "xposter:choose-vault", language: currentLanguage });
     if (response?.ok) {
       log(`Local image folder set: ${response.name}.`);
       await refreshPageState();

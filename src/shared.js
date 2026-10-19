@@ -855,7 +855,7 @@
       return { ok: false, error: "Absolute paths outside the selected folder are not supported" };
     }
 
-    const parts = cleanPath.split("/").map((part) => {
+    const decodedParts = cleanPath.split("/").map((part) => {
       try {
         return decodeURIComponent(part);
       } catch {
@@ -863,11 +863,15 @@
       }
     });
 
-    let depth = 0;
-    for (const part of parts) {
-      if (part === "..") depth -= 1;
-      else if (part && part !== ".") depth += 1;
-      if (depth < 0) return { ok: false, error: "Path escapes the selected folder" };
+    // Markdown may refer to assets relative to a drafts subfolder. The user
+    // selects the shared asset root, so leading ../ segments are rebased to
+    // that root, never followed into its parent directory. Keep source intact.
+    const parts = decodedParts.filter((part) => part && part !== ".");
+    while (parts[0] === "..") parts.shift();
+    if (!parts.length) return { ok: false, error: "Local image path is empty", source };
+    if (parts.includes("..")) return { ok: false, error: "Path escapes the selected folder", source };
+    if (parts.some((part) => /[\\/\0]/.test(part))) {
+      return { ok: false, error: "Invalid local image path segment", source };
     }
 
     try {

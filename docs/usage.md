@@ -70,6 +70,8 @@ The main button stays labeled **Publish** once Markdown is loaded. One click che
 
 If local images use relative paths and no readable folder is configured, a dialog opens on the X page. For `./images/photo.png`, choose the parent of `images`. The flow continues after selection; cancelling stops before writing.
 
+Leading `../` or `../../` is ignored when resolving local images. For `../40_Assets/cover.png`, select the parent of `40_Assets`. The Markdown is unchanged and file access stays inside the selected folder.
+
 Chrome asks for web image website access when needed. Downloads are checked automatically. Text-only drafts do not require a folder. Tables become images and still require X media uploads.
 
 ## 7. Errors
