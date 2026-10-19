@@ -12,7 +12,7 @@
         <div>
           <p class="eyebrow">xPoster <span id="extensionVersion">v...</span></p>
           <h1>Import Markdown to X Articles</h1>
-          <p class="topbar-subtitle">Put your draft here first. xPoster shows the next step and never publishes for you.</p>
+          <p class="topbar-subtitle">Paste Markdown or choose a file, then click Publish.</p>
         </div>
         <div class="topbar-actions">
           <label class="language-control" for="languageSelect">
@@ -144,8 +144,8 @@
         <div class="composer-head">
           <label for="markdown">Markdown draft</label>
           <div class="toolbar">
-            <button class="icon-button" id="loadFile" title="Choose Markdown file" aria-label="Choose Markdown file">
-              <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8l-6-6Zm-1 2.5L17.5 9H13V4.5ZM8 13h3V9h2v4h3l-4 4-4-4Z"/></svg>
+            <button class="secondary compact" id="loadFile" title="Choose Markdown file" aria-label="Choose Markdown file">
+              Choose Markdown file
             </button>
             <button class="text-button" id="loadSmoke" title="Load an example Markdown draft" aria-label="Load example Markdown draft">Example</button>
             <button class="icon-button" id="clearDraft" title="Clear draft" aria-label="Clear draft">
@@ -158,12 +158,12 @@
           <span>This box always keeps the original Markdown text. Use Preview to see recognized images and links; images appear in X only after approval, download check, and Import.</span>
         </div>
         <textarea id="markdown" spellcheck="false" placeholder="# Article title&#10;&#10;Paste your Markdown here. xPoster will preview text and images, then show the next step."></textarea>
-        <p class="draft-help">If image links still look like Markdown here, that is normal. xPoster converts them during Import, not inside this text box.</p>
+        <p class="draft-help">Checks run automatically. Review and publish the finished draft in X.</p>
       </section>
 
       <section class="actions" aria-label="Main import actions" data-empty="true">
         <div class="action-primary-block">
-          <span class="action-label">Do this next</span>
+          <span class="action-label">Publish</span>
           <button class="primary" id="importDraft" type="button">
             <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 4h16v3H4V4Zm0 5h10v3H4V9Zm0 5h8v3H4v-3Zm13.5-.7V9h2v4.3l1.6-1.6 1.4 1.4-3.5 3.5-3.5-3.5 1.4-1.4 1.6 1.6ZM17 18h5v2h-5v-2Z"/></svg>
             Import
@@ -173,7 +173,16 @@
           <button class="secondary" id="openArticles" type="button">Open article</button>
           <button class="secondary" id="dockCheck" type="button">Check article</button>
         </div>
-        <p class="import-hint" id="importHint" data-tone="warn">Paste or load Markdown before importing.</p>
+        <p class="import-hint" id="importHint" role="status" aria-live="polite" data-tone="warn">Paste or load Markdown before importing.</p>
+      </section>
+
+      <section class="publish-error" id="publishError" role="alert" hidden>
+        <div class="section-head">
+          <h2>Publish failed</h2>
+          <button class="secondary compact" id="copyPublishError" type="button">Copy error</button>
+        </div>
+        <span id="copyErrorFeedback" role="status" aria-live="polite"></span>
+        <pre id="publishErrorText" tabindex="0"></pre>
       </section>
 
       <section class="remote-permissions" id="remotePermissionPanel" aria-label="Remote image access" data-tone="idle" hidden>

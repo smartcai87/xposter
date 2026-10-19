@@ -740,12 +740,45 @@
     return btoa(output);
   }
 
-  async function openLocalDb() {
+  function openLocalDb(version) {
     return new Promise((resolve, reject) => {
-      const request = indexedDB.open(LOCAL_DB, 1);
-      request.onupgradeneeded = () => request.result.createObjectStore(LOCAL_STORE);
-      request.onsuccess = () => resolve(request.result);
-      request.onerror = () => reject(request.error);
+      // The X origin may already have a newer database from another xPoster
+      // build. Omit the version to open it without requesting a downgrade.
+      const request = version === undefined
+        ? indexedDB.open(LOCAL_DB)
+        : indexedDB.open(LOCAL_DB, version);
+      let blocked = false;
+      request.onupgradeneeded = () => {
+        if (!request.result.objectStoreNames.contains(LOCAL_STORE)) {
+          request.result.createObjectStore(LOCAL_STORE);
+        }
+      };
+      request.onblocked = () => {
+        blocked = true;
+        reject(new Error("Local image storage is blocked by another X tab. Close other X tabs, refresh this article, and choose the image folder again."));
+      };
+      request.onsuccess = () => {
+        const db = request.result;
+        if (blocked) {
+          db.close();
+          return;
+        }
+        db.onversionchange = () => db.close();
+        if (!db.objectStoreNames.contains(LOCAL_STORE)) {
+          // Repair only the missing store; preserve all other stores and data.
+          const nextVersion = db.version + 1;
+          db.close();
+          resolve(openLocalDb(nextVersion));
+          return;
+        }
+        resolve(db);
+      };
+      request.onerror = () => {
+        // Another tab may have upgraded between inspection and repair.
+        if (version !== undefined && request.error?.name === "VersionError") {
+          resolve(openLocalDb());
+        } else reject(request.error);
+      };
     });
   }
 
@@ -756,22 +789,33 @@
     });
   }
 
-  async function saveVaultHandle(handle) {
+  async function withLocalStore(mode, operation) {
     const db = await openLocalDb();
-    const store = db.transaction(LOCAL_STORE, "readwrite").objectStore(LOCAL_STORE);
-    await requestToPromise(store.put({ handle, name: handle.name, savedAt: Date.now() }, VAULT_KEY));
+    try {
+      const transaction = db.transaction(LOCAL_STORE, mode);
+      const complete = new Promise((resolve, reject) => {
+        transaction.oncomplete = resolve;
+        transaction.onabort = () => reject(transaction.error || new Error("Local image storage transaction was aborted"));
+      });
+      const request = operation(transaction.objectStore(LOCAL_STORE));
+      const [result] = await Promise.all([requestToPromise(request), complete]);
+      return result;
+    } finally {
+      db.close();
+    }
+  }
+
+  async function saveVaultHandle(handle) {
+    await withLocalStore("readwrite", (store) =>
+      store.put({ handle, name: handle.name, savedAt: Date.now() }, VAULT_KEY));
   }
 
   async function getVaultRecord() {
-    const db = await openLocalDb();
-    const store = db.transaction(LOCAL_STORE, "readonly").objectStore(LOCAL_STORE);
-    return (await requestToPromise(store.get(VAULT_KEY))) || null;
+    return (await withLocalStore("readonly", (store) => store.get(VAULT_KEY))) || null;
   }
 
   async function clearVaultHandle() {
-    const db = await openLocalDb();
-    const store = db.transaction(LOCAL_STORE, "readwrite").objectStore(LOCAL_STORE);
-    await requestToPromise(store.delete(VAULT_KEY));
+    await withLocalStore("readwrite", (store) => store.delete(VAULT_KEY));
   }
 
   async function ensureReadPermission(handle) {

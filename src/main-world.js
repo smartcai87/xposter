@@ -414,7 +414,10 @@
               const data = entity.getData();
               const item = data?.mediaItems?.[0] || data?.media_items?.[0];
               const mediaId = item?.mediaId || item?.media_id || null;
-              found = { entityKey, blockKey, mediaId };
+              // A MEDIA block appears before its server-side media ID is ready.
+              // Wait for the ID so the same upload can also become the cover.
+              if (!mediaId) return;
+              found = { entityKey, blockKey, mediaId: String(mediaId) };
             } catch {}
           }
         );
@@ -604,7 +607,15 @@
     try {
       text = await response.text();
     } catch {}
-    return { ok: response.ok, status: response.status, body: text.slice(0, 240) };
+    let data = null;
+    try { data = JSON.parse(text); } catch {}
+    const error = data?.errors?.map((item) => item.message || "GraphQL error").join("; ") || null;
+    return {
+      ok: response.ok && Boolean(data?.data) && !error,
+      status: response.status,
+      error: error || (!response.ok ? `HTTP ${response.status}` : !data?.data ? "X returned no GraphQL result" : null),
+      body: text.slice(0, 240)
+    };
   }
 
   function updateTitleGraphql(articleId, title) {
@@ -645,6 +656,48 @@
     nextEditorState = EditorState.moveSelectionToEnd(nextEditorState);
     draftNode.props.onChange(nextEditorState);
     return { ok: true };
+  }
+
+  function findUploadedMediaBlock(draftNode, upload) {
+    const content = draftNode.props.editorState.getCurrentContent();
+    let match = null;
+    content.getBlockMap().forEach((block, key) => {
+      if (match || block.getType() !== "atomic") return;
+      block.findEntityRanges(
+        (character) => Boolean(character.getEntity()),
+        (start) => {
+          const entityKey = block.getCharacterList().get(start)?.getEntity?.();
+          if (!entityKey) return;
+          try {
+            const entity = content.getEntity(entityKey);
+            if (entity.getType() !== "MEDIA") return;
+            const data = entity.getData();
+            const items = data?.mediaItems || data?.media_items || [];
+            if (entityKey === upload.entityKey || items.some((item) =>
+              String(item.mediaId || item.media_id || "") === String(upload.mediaId))) match = key;
+          } catch {}
+        }
+      );
+    });
+    return match;
+  }
+
+  async function removeCoverBodyImage(upload) {
+    // Setting a cover can replace the React editor instance. Resolve the live
+    // node and the uploaded media identity instead of relying on old block keys.
+    let node = findDraftStateNode();
+    if (!node) return { ok: false, error: "X editor disappeared after setting the cover" };
+    const key = findUploadedMediaBlock(node, upload);
+    if (!key) return { ok: true, alreadyAbsent: true };
+    const result = deleteBlockByKey(node, key);
+    if (!result.ok) return result;
+    const deadline = Date.now() + 2500;
+    while (Date.now() < deadline) {
+      await sleep(80);
+      node = findDraftStateNode();
+      if (node && !findUploadedMediaBlock(node, upload)) return { ok: true };
+    }
+    return { ok: false, error: "Cover was set, but its duplicate body image could not be removed. Remove that body image in X." };
   }
 
   async function setTitleViaUi(title) {
@@ -840,7 +893,7 @@
           summary.cover.graphql = result;
           if (result.ok) {
             await sleep(600);
-            const deleteResult = deleteBlockByKey(draftNode, coverUpload.blockKey);
+            const deleteResult = await removeCoverBodyImage(coverUpload);
             summary.cover.bodyBlockDeleted = deleteResult;
             if (!deleteResult.ok) console.warn(LOG, "cover block cleanup failed", deleteResult);
           } else {
@@ -854,7 +907,12 @@
     }
 
     progress("Cleaning up import markers...");
+    draftNode = findDraftStateNode() || draftNode;
     summary.markersCleaned += cleanupMarkers(draftNode, payload.markerPrefix);
+    // Let marker cleanup commit before kicking rendering; otherwise an old
+    // state can restore a body image that has just been removed for the cover.
+    await sleep(80);
+    draftNode = findDraftStateNode() || draftNode;
     kickRender(draftNode);
     await sleep(250);
     post("done", { summary });
