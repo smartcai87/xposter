@@ -2,7 +2,7 @@
   "manifest_version": 3,
   "name": "xPoster",
   "description": "A refined Markdown publishing console for X Articles.",
-  "version": "0.1.45",
+  "version": "0.1.46",
   "minimum_chrome_version": "116",
   "action": {
     "default_title": "xPoster",

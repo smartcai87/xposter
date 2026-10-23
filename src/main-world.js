@@ -278,31 +278,62 @@
     return findDraftStateNode();
   }
 
-  function replaceMarkerWithAtomic(contentState, marker, entityType, data, mutability, sampleBlock) {
-    const blockKey = findMarkerBlock(contentState, marker);
-    if (!blockKey) return { ok: false, error: `Marker not found: ${marker}`, contentState };
-
-    const markerBlock = contentState.getBlockMap().get(blockKey);
-    const blockTemplate = markerBlock || sampleBlock;
+  // An atomic block (with a new entity) shaped like the marker's block.
+  function createAtomicBlock(contentState, markerBlock, sampleBlock, entityType, data, mutability, blockKey) {
     const characterList = markerBlock.getCharacterList();
     const markerCharacter = firstCharacterMetadata(markerBlock, false);
     const fallbackCharacter = firstCharacterMetadata(sampleBlock, false);
     const sampleCharacter = markerCharacter?.set ? markerCharacter : fallbackCharacter;
-    if (!sampleCharacter?.set) return { ok: false, error: `No Draft.js character sample for marker: ${marker}`, contentState };
+    if (!sampleCharacter?.set) return { ok: false, error: "No Draft.js character sample" };
     const CharacterList = characterList.constructor;
 
     const withEntity = contentState.createEntity(entityType, mutability || "IMMUTABLE", data || {});
     const entityKey = withEntity.getLastCreatedEntityKey();
     const character = sampleCharacter.set("entity", entityKey);
-    const atomicBlock = blockTemplate.merge({
+    const atomicBlock = markerBlock.merge({
       key: blockKey,
       type: "atomic",
       text: " ",
       characterList: CharacterList([character]),
       depth: 0
     });
-    const blockMap = withEntity.getBlockMap().set(blockKey, atomicBlock);
-    return { ok: true, entityKey, contentState: withEntity.set("blockMap", blockMap) };
+    return { ok: true, withEntity, entityKey, atomicBlock };
+  }
+
+  function replaceMarkerWithAtomic(contentState, marker, entityType, data, mutability, sampleBlock) {
+    const blockKey = findMarkerBlock(contentState, marker);
+    if (!blockKey) return { ok: false, error: `Marker not found: ${marker}`, contentState };
+
+    const markerBlock = contentState.getBlockMap().get(blockKey);
+    const created = createAtomicBlock(contentState, markerBlock, sampleBlock, entityType, data, mutability, blockKey);
+    if (!created.ok) return { ok: false, error: `${created.error} for marker: ${marker}`, contentState };
+    const blockMap = created.withEntity.getBlockMap().set(blockKey, created.atomicBlock);
+    return { ok: true, entityKey: created.entityKey, contentState: created.withEntity.set("blockMap", blockMap) };
+  }
+
+  // Put a media block right before the marker's block; the marker stays as the
+  // anchor until the article is final.
+  function insertMediaBeforeMarker(contentState, marker, data, mutability, sampleBlock) {
+    const markerKey = findMarkerBlock(contentState, marker);
+    if (!markerKey) return { ok: false, error: `Marker not found: ${marker}` };
+    const blockMap = contentState.getBlockMap();
+    let blockKey;
+    do {
+      blockKey = Math.random().toString(36).slice(2, 7);
+    } while (blockMap.has(blockKey));
+    const created = createAtomicBlock(contentState, blockMap.get(markerKey), sampleBlock, "MEDIA", data, mutability, blockKey);
+    if (!created.ok) return { ok: false, error: `${created.error} for marker: ${marker}` };
+    let nextBlockMap = blockMap.constructor();
+    blockMap.forEach((block, key) => {
+      if (key === markerKey) nextBlockMap = nextBlockMap.set(blockKey, created.atomicBlock);
+      nextBlockMap = nextBlockMap.set(key, block);
+    });
+    return {
+      ok: true,
+      entityKey: created.entityKey,
+      blockKey,
+      contentState: created.withEntity.set("blockMap", nextBlockMap)
+    };
   }
 
   function insertAtomicBatch(draftNode, operations) {
@@ -349,6 +380,32 @@
     const bytes = new Uint8Array(binary.length);
     for (let index = 0; index < binary.length; index += 1) bytes[index] = binary.charCodeAt(index);
     return new File([bytes], fileName, { type: mime });
+  }
+
+  // Media IDs already in the article. Entity keys change when X rebuilds its
+  // editor, so an image that was there before an upload can look new by key.
+  function existingMediaIds(contentState) {
+    const ids = new Set();
+    contentState.getBlockMap().forEach((block) => {
+      if (block.getType() !== "atomic") return;
+      block.findEntityRanges(
+        (character) => Boolean(character.getEntity()),
+        (start) => {
+          const entityKey = block.getCharacterList().get(start)?.getEntity?.();
+          if (!entityKey) return;
+          try {
+            const entity = contentState.getEntity(entityKey);
+            if (entity.getType() !== "MEDIA") return;
+            const data = entity.getData();
+            for (const item of data?.mediaItems || data?.media_items || []) {
+              const id = item?.mediaId || item?.media_id;
+              if (id) ids.add(String(id));
+            }
+          } catch {}
+        }
+      );
+    });
+    return ids;
   }
 
   function existingMediaEntities(contentState) {
@@ -445,46 +502,71 @@
     return true;
   }
 
-  // The upload itself worked (X has a media ID) but the article around it was
-  // replaced. Restore the article as it was before the upload and put the
-  // uploaded media where its placeholder was, so nothing is uploaded twice.
-  async function restoreArticleWithMedia(beforeContent, marker, markerKey, uploadedContent, uploaded) {
-    let data = {};
-    let mutability = "IMMUTABLE";
+  // The entity data X saved for an uploaded image, copied so it can rebuild the
+  // block if X later drops it.
+  function readMediaEntity(contentState, entityKey) {
     try {
-      const entity = uploadedContent.getEntity(uploaded.entityKey);
-      data = entity.getData() || {};
-      mutability = entity.getMutability?.() || mutability;
+      const entity = contentState.getEntity(entityKey);
+      let data = entity.getData() || {};
       try { data = JSON.parse(JSON.stringify(data)); } catch {}
-    } catch (error) {
-      return { ok: false, error: `Uploaded media could not be read back: ${error?.message || error}` };
+      return { data, mutability: entity.getMutability?.() || "IMMUTABLE" };
+    } catch {
+      return null;
     }
-    const node = findDraftStateNode();
-    if (!node) return { ok: false, error: "X editor disappeared while restoring the article" };
-    const placed = replaceMarkerWithAtomic(beforeContent, marker, "MEDIA", data, mutability, findDraftSampleBlock(node));
-    if (!placed.ok) return { ok: false, error: placed.error };
-    putBackContent(placed.contentState, markerKey);
-    const settled = await waitUntil(() => {
-      const block = findDraftStateNode()?.props.editorState.getCurrentContent().getBlockMap().get(markerKey);
-      return block?.getType() === "atomic";
-    }, 2500);
-    if (!settled) return { ok: false, error: "The article could not be restored after X replaced it" };
-    return { ok: true, entityKey: placed.entityKey, blockKey: markerKey, mediaId: uploaded.mediaId };
   }
 
-  async function uploadImageAtMarker(draftNode, imageOperation, existingAtomicBlocks, laterMarkers = []) {
+  // X can still be rebuilding its editor for a moment after the title and cover
+  // calls. Wait until the editor instance and its content stop changing.
+  async function waitForEditorSettled(timeoutMs = 4000, quietMs = 700) {
+    const startedAt = Date.now();
+    let last = null;
+    let since = startedAt;
+    while (Date.now() - startedAt < timeoutMs) {
+      const node = findDraftStateNode();
+      const content = node ? node.props.editorState.getCurrentContent() : null;
+      if (!last || last.node !== node || last.content !== content) {
+        last = { node, content };
+        since = Date.now();
+      } else if (Date.now() - since >= quietMs) {
+        return true;
+      }
+      await sleep(100);
+    }
+    return false;
+  }
+
+  // The upload itself worked (X has a media ID) but the article around it was
+  // replaced. Restore the article as it was before the upload and put the
+  // uploaded media before its placeholder, so nothing is uploaded twice.
+  async function restoreArticleWithMedia(beforeContent, marker, uploadedContent, uploaded) {
+    const media = readMediaEntity(uploadedContent, uploaded.entityKey);
+    if (!media) return { ok: false, error: "Uploaded media could not be read back" };
+    const node = findDraftStateNode();
+    if (!node) return { ok: false, error: "X editor disappeared while restoring the article" };
+    const placed = insertMediaBeforeMarker(beforeContent, marker, media.data, media.mutability, findDraftSampleBlock(node));
+    if (!placed.ok) return { ok: false, error: placed.error };
+    putBackContent(placed.contentState, placed.blockKey);
+    const settled = await waitUntil(
+      () => Boolean(findDraftStateNode()?.props.editorState.getCurrentContent().getBlockMap().has(placed.blockKey)),
+      2500
+    );
+    if (!settled) return { ok: false, error: "The article could not be restored after X replaced it" };
+    return { ok: true, entityKey: placed.entityKey, blockKey: placed.blockKey, mediaId: uploaded.mediaId, ...media };
+  }
+
+  async function uploadImageAtMarker(draftNode, imageOperation, existingAtomicBlocks, laterMarkers = [], seenMediaIds = new Set()) {
     const onFilesAdded = findOnFilesAdded();
     if (!onFilesAdded) return { ok: false, error: "X upload handler was not reachable" };
 
     const beforeContent = draftNode.props.editorState.getCurrentContent();
     const beforeTexts = textBlocks(beforeContent);
-    const markerKey = findMarkerBlock(beforeContent, imageOperation.marker);
     if (!placeSelectionAtMarker(draftNode, imageOperation.marker)) {
       return { ok: false, error: "Image placeholder was not found in the X editor" };
     }
     await sleep(80);
 
     const before = existingMediaEntities(draftNode.props.editorState.getCurrentContent());
+    const beforeIds = existingMediaIds(draftNode.props.editorState.getCurrentContent());
     const preparedFile = await requestPreparedFile(imageOperation);
     const file = base64ToFile(preparedFile.base64, preparedFile.fileName, preparedFile.mime);
 
@@ -511,6 +593,7 @@
               // A MEDIA block appears before its server-side media ID is ready.
               // Wait for the ID so the same upload can also become the cover.
               if (!mediaId) return;
+              if (beforeIds.has(String(mediaId)) || seenMediaIds.has(String(mediaId))) return;
               found = { entityKey, blockKey, mediaId: String(mediaId) };
             } catch {}
           }
@@ -521,14 +604,13 @@
         if (body.replaced) {
           console.warn(LOG, "X replaced the article during an upload; restoring it", body);
           progress("X replaced the article during the upload. Putting it back...", "warn");
-          const restored = await restoreArticleWithMedia(beforeContent, imageOperation.marker, markerKey, contentState, found);
+          const restored = await restoreArticleWithMedia(beforeContent, imageOperation.marker, contentState, found);
           if (!restored.ok) return restored;
-          found = restored;
-          existingAtomicBlocks.add(found.blockKey);
-          return { ok: true, ...found, restored: { kept: body.kept, total: body.total } };
+          existingAtomicBlocks.add(restored.blockKey);
+          return { ...restored, restored: { kept: body.kept, total: body.total } };
         }
         existingAtomicBlocks.add(found.blockKey);
-        return { ok: true, ...found };
+        return { ok: true, ...found, ...readMediaEntity(contentState, found.entityKey) };
       }
     }
 
@@ -557,86 +639,124 @@
     return true;
   }
 
-  function relocateImages(draftNode, uploads, protectedAtomicBlocks) {
-    if (!uploads.length) return { moved: 0, missing: 0 };
+  // Make sure every uploaded image is in the article, right before its
+  // placeholder. Images are found by their X media ID because entity keys change
+  // when X rebuilds its editor, and one that has gone missing is rebuilt from the
+  // entity data saved at upload time. Placeholders stay as anchors until the
+  // article is final, so this can run again to repair a later rebuild.
+  function placeImages(draftNode, uploads, protectedAtomicBlocks) {
+    const stats = { moved: 0, created: 0, missing: 0 };
+    const wanted = uploads.filter((upload) => !upload.dropped);
+    if (!wanted.length) return stats;
     const editorState = draftNode.props.editorState;
     const EditorState = editorState.constructor;
     const SelectionState = editorState.getSelection().constructor;
-    const contentState = editorState.getCurrentContent();
-    const blockMap = contentState.getBlockMap();
-    const markerEntries = new Map(uploads.map((upload) => [upload.marker, upload]));
-    const entityToBlock = new Map();
-    const mediaBlocks = [];
+    let contentState = editorState.getCurrentContent();
+    const ourIds = new Set(uploads.map((upload) => String(upload.mediaId || "")));
 
-    blockMap.forEach((block, blockKey) => {
-      if (block.getType() === "atomic") {
-        let firstEntity = null;
-        block.findEntityRanges(
-          (character) => Boolean(character.getEntity()),
-          (start) => {
-            const entityKey = block.getCharacterList().get(start)?.getEntity?.();
-            if (entityKey) {
-              firstEntity ||= entityKey;
-              entityToBlock.set(entityKey, blockKey);
-            }
-          }
-        );
-        if (!protectedAtomicBlocks.has(blockKey) && firstEntity) {
+    const byMediaId = new Map();
+    const byEntity = new Map();
+    const spare = [];
+    contentState.getBlockMap().forEach((block, blockKey) => {
+      if (block.getType() !== "atomic") return;
+      let firstEntity = null;
+      let isOurs = false;
+      let isMedia = false;
+      block.findEntityRanges(
+        (character) => Boolean(character.getEntity()),
+        (start) => {
+          const entityKey = block.getCharacterList().get(start)?.getEntity?.();
+          if (!entityKey) return;
+          firstEntity ||= entityKey;
+          byEntity.set(entityKey, blockKey);
           try {
-            if (contentState.getEntity(firstEntity).getType() === "MEDIA") {
-              mediaBlocks.push({ blockKey, entityKey: firstEntity });
+            const entity = contentState.getEntity(entityKey);
+            if (entity.getType() !== "MEDIA") return;
+            isMedia = true;
+            const data = entity.getData();
+            for (const item of data?.mediaItems || data?.media_items || []) {
+              const id = String(item?.mediaId || item?.media_id || "");
+              if (!id) continue;
+              byMediaId.set(id, blockKey);
+              if (ourIds.has(id)) isOurs = true;
             }
           } catch {}
         }
-      } else {
-        const marker = (block.getText() || "").trim();
-        if (markerEntries.has(marker)) markerEntries.get(marker).markerBlock = blockKey;
-      }
+      );
+      if (isMedia && !isOurs && !protectedAtomicBlocks.has(blockKey)) spare.push(blockKey);
     });
 
-    const moves = new Map();
-    let missing = 0;
-    let fallbackIndex = 0;
-
-    for (const upload of uploads) {
-      if (!upload.markerBlock) {
-        missing += 1;
+    const items = [];
+    const claimed = new Set();
+    for (const upload of wanted) {
+      const markerKey = findMarkerBlock(contentState, upload.marker);
+      if (!markerKey) {
+        stats.missing += 1;
         continue;
       }
-      let imageBlock = upload.entityKey ? entityToBlock.get(upload.entityKey) : null;
-      if (!imageBlock) {
-        while (fallbackIndex < mediaBlocks.length && moves.has(mediaBlocks[fallbackIndex].blockKey)) {
-          fallbackIndex += 1;
-        }
-        imageBlock = mediaBlocks[fallbackIndex]?.blockKey || null;
-        fallbackIndex += 1;
-      }
-      if (!imageBlock) {
-        missing += 1;
-        continue;
-      }
-      if (imageBlock !== upload.markerBlock) moves.set(upload.markerBlock, imageBlock);
+      const imageKey =
+        (upload.mediaId && byMediaId.get(String(upload.mediaId))) ||
+        (upload.entityKey && byEntity.get(upload.entityKey)) ||
+        null;
+      if (imageKey) claimed.add(imageKey);
+      items.push({ upload, imageKey });
     }
 
-    if (!moves.size) return { moved: 0, missing };
-    const destinationBlocks = new Set(moves.values());
-    const orderedKeys = [];
-    blockMap.forEach((block, key) => {
-      if (moves.has(key)) orderedKeys.push(moves.get(key));
-      else if (!destinationBlocks.has(key)) orderedKeys.push(key);
-    });
+    const sampleBlock = findDraftSampleBlock(draftNode);
+    let spareIndex = 0;
+    for (const item of items) {
+      if (item.imageKey) continue;
+      while (spareIndex < spare.length && claimed.has(spare[spareIndex])) spareIndex += 1;
+      if (spare[spareIndex]) {
+        item.imageKey = spare[spareIndex];
+        spareIndex += 1;
+        continue;
+      }
+      const { upload } = item;
+      const made = upload.data
+        ? insertMediaBeforeMarker(contentState, upload.marker, upload.data, upload.mutability, sampleBlock)
+        : { ok: false };
+      if (!made.ok) {
+        stats.missing += 1;
+        continue;
+      }
+      contentState = made.contentState;
+      item.imageKey = made.blockKey;
+      upload.entityKey = made.entityKey;
+      upload.blockKey = made.blockKey;
+      stats.created += 1;
+    }
 
-    let nextBlockMap = blockMap.constructor();
-    for (const key of orderedKeys) nextBlockMap = nextBlockMap.set(key, blockMap.get(key));
-    const selection = SelectionState.createEmpty(orderedKeys[orderedKeys.length - 1]);
-    const nextContent = contentState
-      .set("blockMap", nextBlockMap)
-      .set("selectionBefore", selection)
-      .set("selectionAfter", selection);
+    const blockMap = contentState.getBlockMap();
+    const keys = [];
+    blockMap.forEach((block, key) => {
+      keys.push(key);
+    });
+    const moves = new Map();
+    for (const { upload, imageKey } of items) {
+      if (!imageKey) continue;
+      const markerKey = findMarkerBlock(contentState, upload.marker);
+      if (keys[keys.indexOf(markerKey) - 1] !== imageKey) moves.set(markerKey, imageKey);
+    }
+    if (moves.size) {
+      const moving = new Set(moves.values());
+      let nextBlockMap = blockMap.constructor();
+      for (const key of keys) {
+        if (moving.has(key)) continue;
+        if (moves.has(key)) nextBlockMap = nextBlockMap.set(moves.get(key), blockMap.get(moves.get(key)));
+        nextBlockMap = nextBlockMap.set(key, blockMap.get(key));
+      }
+      contentState = contentState.set("blockMap", nextBlockMap);
+      stats.moved = moves.size;
+    }
+
+    if (!stats.moved && !stats.created) return stats;
+    const selection = SelectionState.createEmpty(keys[keys.length - 1]);
+    const nextContent = contentState.set("selectionBefore", selection).set("selectionAfter", selection);
     let nextEditorState = EditorState.push(editorState, nextContent, "remove-range");
     nextEditorState = EditorState.moveSelectionToEnd(nextEditorState);
     draftNode.props.onChange(nextEditorState);
-    return { moved: moves.size, missing };
+    return stats;
   }
 
   function cleanupMarkers(draftNode, markerPrefix) {
@@ -894,9 +1014,12 @@
       imageErrors: [],
       markersCleaned: 0,
       relocatedImages: 0,
+      recreatedImages: 0,
+      atomicRestored: 0,
       bodyRestores: [],
       body: null,
       bodyLost: false,
+      markersLeft: 0,
       title: {
         requested: Boolean(payload.title),
         value: payload.title || null,
@@ -943,6 +1066,7 @@
       ? draftNode.props.editorState.getCurrentContent()
       : null;
     const uploads = [];
+    const seenMediaIds = new Set();
     for (let index = 0; index < imageOps.length; index += 1) {
       const op = imageOps[index];
       const pendingMarkers = imageOps.slice(index).map((item) => item.marker);
@@ -956,24 +1080,27 @@
         summary.bodyRestores.push({ stage: "before-upload", image: index + 1, ok });
         draftNode = findDraftStateNode() || draftNode;
       }
-      let result = await uploadImageAtMarker(draftNode, op, protectedAtomicBlocks, laterMarkers);
+      let result = await uploadImageAtMarker(draftNode, op, protectedAtomicBlocks, laterMarkers, seenMediaIds);
       if (!result.ok && /timed out/i.test(result.error || "")) {
         progress(`Retrying image ${index + 1}...`, "warn");
         await sleep(1400);
         draftNode = findDraftStateNode() || draftNode;
-        result = await uploadImageAtMarker(draftNode, op, protectedAtomicBlocks, laterMarkers);
+        result = await uploadImageAtMarker(draftNode, op, protectedAtomicBlocks, laterMarkers, seenMediaIds);
       }
       if (result.restored) {
         summary.bodyRestores.push({ stage: "after-upload", image: index + 1, ...result.restored });
       }
       if (result.ok) {
+        seenMediaIds.add(String(result.mediaId));
         summary.imgOk += 1;
         uploads.push({
           marker: op.marker,
           blockKey: result.blockKey,
           entityKey: result.entityKey,
           mediaId: result.mediaId,
-          source: op.op.source
+          source: op.op.source,
+          data: result.data,
+          mutability: result.mutability
         });
       } else {
         summary.imgFail += 1;
@@ -990,15 +1117,9 @@
         console.warn(LOG, "image failed", result.error);
       }
       draftNode = findDraftStateNode() || draftNode;
-      if (markersPresent(draftNode, laterMarkers)) knownGood = draftNode.props.editorState.getCurrentContent();
-    }
-
-    if (uploads.length) {
-      progress("Reordering uploaded media...");
-      await sleep(900);
-      const result = relocateImages(draftNode, uploads, protectedAtomicBlocks);
-      summary.relocatedImages = result.moved;
-      await sleep(400);
+      const latest = draftNode.props.editorState.getCurrentContent();
+      const stillWhole = !knownGood || !inspectBody(textBlocks(knownGood), latest, op.marker, laterMarkers).replaced;
+      if (stillWhole && markersPresent(draftNode, laterMarkers)) knownGood = latest;
     }
 
     if (payload.title) {
@@ -1018,29 +1139,24 @@
       }
     }
 
+    let coverUpload = null;
     if (payload.cover) {
       if (!articleId) {
         summary.cover.skippedReason = "No article id in URL";
         console.warn(LOG, "cover update skipped: no article id");
       } else {
-        const coverUpload = uploads.find((upload) => upload.source === payload.cover && upload.mediaId);
-        if (coverUpload) {
+        const candidate = uploads.find((upload) => upload.source === payload.cover && upload.mediaId);
+        if (candidate) {
           summary.cover.matchedUpload = true;
-          summary.cover.mediaIdSuffix = coverUpload.mediaId ? coverUpload.mediaId.slice(-8) : null;
+          summary.cover.mediaIdSuffix = candidate.mediaId ? candidate.mediaId.slice(-8) : null;
           progress("Setting cover...");
-          const result = await updateCoverGraphql(articleId, coverUpload.mediaId).catch((error) => ({
+          const result = await updateCoverGraphql(articleId, candidate.mediaId).catch((error) => ({
             ok: false,
             error: error?.message || String(error)
           }));
           summary.cover.graphql = result;
-          if (result.ok) {
-            await sleep(600);
-            const deleteResult = await removeCoverBodyImage(coverUpload);
-            summary.cover.bodyBlockDeleted = deleteResult;
-            if (!deleteResult.ok) console.warn(LOG, "cover block cleanup failed", deleteResult);
-          } else {
-            console.warn(LOG, "cover update failed", result);
-          }
+          if (result.ok) coverUpload = candidate;
+          else console.warn(LOG, "cover update failed", result);
         } else {
           summary.cover.skippedReason = "Cover source has no uploaded media match";
           console.warn(LOG, "cover source has no uploaded media match", payload.cover);
@@ -1048,16 +1164,93 @@
       }
     }
 
-    progress("Cleaning up import markers...");
+    // X can rebuild its editor from the copy it saved when the title or cover call
+    // finishes. That copy has the images where X first inserted them and none of
+    // the placement we only made locally, so wait for X to settle, put the article
+    // together, clean up, and look again in case the rebuild comes late.
+    const markerPrefix = payload.markerPrefix;
+    const allMarkers = uploads.map((upload) => upload.marker);
+    const articleTexts = knownGood ? textBlocks(knownGood).filter((text) => !text.startsWith(markerPrefix)) : [];
+    let cleanedUp = false;
+
+    const settleArticle = async () => {
+      draftNode = findDraftStateNode() || draftNode;
+      let changed = false;
+      if (knownGood) {
+        const body = inspectBody(articleTexts, draftNode.props.editorState.getCurrentContent(), null, cleanedUp ? [] : allMarkers);
+        if (body.replaced && putBackContent(knownGood)) {
+          console.warn(LOG, "article was replaced after the title and cover calls", body);
+          summary.bodyRestores.push({ stage: "after-settle", kept: body.kept, total: body.total });
+          progress("X replaced the article. Putting it back...", "warn");
+          await waitUntil(() => markersPresent(findDraftStateNode(), allMarkers), 2500);
+          draftNode = findDraftStateNode() || draftNode;
+          changed = true;
+        }
+      }
+      const content = draftNode.props.editorState.getCurrentContent();
+      const reverted = atomicOps.filter((item) => findMarkerBlock(content, item.marker));
+      if (reverted.length) {
+        const result = insertAtomicBatch(draftNode, reverted);
+        summary.atomicRestored += result.okCount;
+        if (result.okCount) {
+          changed = true;
+          await sleep(350);
+          draftNode = findDraftStateNode() || draftNode;
+        }
+      }
+      if (coverUpload) {
+        const removed = await removeCoverBodyImage(coverUpload);
+        summary.cover.bodyBlockDeleted = removed;
+        if (removed.ok) {
+          coverUpload.dropped = true;
+          if (!removed.alreadyAbsent) changed = true;
+        } else {
+          console.warn(LOG, "cover block cleanup failed", removed);
+        }
+        draftNode = findDraftStateNode() || draftNode;
+      }
+      const placed = placeImages(draftNode, uploads, protectedAtomicBlocks);
+      summary.relocatedImages += placed.moved;
+      summary.recreatedImages += placed.created;
+      if (placed.moved || placed.created) {
+        changed = true;
+        await sleep(400);
+        draftNode = findDraftStateNode() || draftNode;
+      }
+      return changed;
+    };
+
+    const articleIsFinal = () => {
+      if (countBlocksStartingWith(draftNode, markerPrefix) > 0) return false;
+      if (coverUpload && findUploadedMediaBlock(draftNode, coverUpload)) return false;
+      return !(articleTexts.length && inspectBody(articleTexts, draftNode.props.editorState.getCurrentContent(), null, []).replaced);
+    };
+
+    const hasMarkers = (payload.plan || []).length > 0;
+    if (hasMarkers) {
+      progress("Putting the article together...");
+      await sleep(900);
+      await waitForEditorSettled();
+    }
+    for (let round = 0; round < (hasMarkers ? 3 : 1); round += 1) {
+      if (hasMarkers) await settleArticle();
+      progress("Cleaning up import markers...");
+      draftNode = findDraftStateNode() || draftNode;
+      summary.markersCleaned += cleanupMarkers(draftNode, markerPrefix);
+      cleanedUp = true;
+      // Let marker cleanup commit before kicking rendering; otherwise an old
+      // state can restore a body image that has just been removed for the cover.
+      await sleep(80);
+      draftNode = findDraftStateNode() || draftNode;
+      kickRender(draftNode);
+      await sleep(250);
+      if (!hasMarkers) break;
+      await sleep(900);
+      draftNode = findDraftStateNode() || draftNode;
+      if (articleIsFinal()) break;
+    }
     draftNode = findDraftStateNode() || draftNode;
-    summary.markersCleaned += cleanupMarkers(draftNode, payload.markerPrefix);
-    // Let marker cleanup commit before kicking rendering; otherwise an old
-    // state can restore a body image that has just been removed for the cover.
-    await sleep(80);
-    draftNode = findDraftStateNode() || draftNode;
-    kickRender(draftNode);
-    await sleep(250);
-    draftNode = findDraftStateNode() || draftNode;
+    summary.markersLeft = countBlocksStartingWith(draftNode, markerPrefix);
     summary.body = importedBodyStats(draftNode, payload);
     summary.bodyLost = summary.body.expected >= 4 && summary.body.actual * 2 < summary.body.expected;
     if (summary.bodyLost) console.warn(LOG, "article body is missing after import", summary.body);

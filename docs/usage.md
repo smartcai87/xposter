@@ -42,6 +42,8 @@ Here is a paragraph with **bold text** and [a link](https://example.com).
 ![image alt](image.png)
 ```
 
+The cover is the `cover:` value in the frontmatter. Without it, an image placed directly under the title becomes the cover and is not repeated in the body. Images further down stay where you put them.
+
 The safest starting point is the included example file:
 
 ```text

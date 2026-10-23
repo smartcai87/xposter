@@ -239,6 +239,110 @@ async function runReplacedScenario({ replace = 'after-upload', stuck = false, im
   if (images === 2) assert.equal(order.indexOf('[image]'), order.indexOf('Paragraph 6') + 1, 'second image sits at its placeholder');
 }
 
+// X can rebuild its editor from the copy it saved when the title or cover call
+// finishes. That copy has each image where X inserted it (the end of the article)
+// and none of the placement xPoster only made locally. rebuild: 'saved-copy'
+// brings that copy back after the cover call; 'renumber' changes entity keys
+// after each upload; 'drop-media' brings back a copy without the first image;
+// 'late-placeholders' brings the copy back after the placeholders were removed.
+async function runLateRebuildScenario({ rebuild }) {
+  const prefix = '__XPOSTER_TEST_';
+  const markers = [`${prefix}TABLE_0__`, `${prefix}IMAGE_1__`];
+  const paragraphs = Array.from({ length: 8 }, (_, index) => `Paragraph ${index + 1}`);
+  const texts = [...paragraphs.slice(0, 3), markers[0], ...paragraphs.slice(3, 6), markers[1], ...paragraphs.slice(6)];
+  let state = new EditorState(new ContentState(BlockMap([['x', new Block('x', 'x')]]), new Map()));
+  let node;
+  let uploads = 0;
+  let saved = null;
+  let cleaning = false;
+  let rebuiltLate = false;
+  const messages = [];
+  const editor = { focus() {}, dispatchEvent: () => true, getBoundingClientRect: () => ({ width: 700, height: 400 }) };
+  function mount(nextState) {
+    state = nextState;
+    node = {
+      props: {
+        editorState: nextState,
+        onChange: value => {
+          setTimeout(() => mount(value), 1);
+          if (cleaning && rebuild === 'late-placeholders' && !rebuiltLate) {
+            rebuiltLate = true;
+            setTimeout(() => mount(saved), 3);
+          }
+        }
+      }
+    };
+    editor.__reactFiber$test = { stateNode: node, memoizedProps: { onFilesAdded }, return: null };
+  }
+  function renumber() {
+    let blocks = BlockMap();
+    const entities = new Map();
+    state.content.blocks.forEach((block, key) => {
+      if (!block.entity) { blocks = blocks.set(key, block); return; }
+      const renamed = block.entity.replace('entity', 'renumbered');
+      entities.set(renamed, state.content.entities.get(block.entity));
+      blocks = blocks.set(key, new Block(key, ' ', renamed));
+    });
+    mount(new EditorState(new ContentState(blocks, entities)));
+  }
+  function onFilesAdded() {
+    const index = ++uploads;
+    // X renumbers the entity keys of earlier images just as the next upload starts.
+    if (rebuild === 'renumber-before-insert' && index === 2) renumber();
+    const key = `media${index}`;
+    const entities = new Map(state.content.entities);
+    entities.set(`entity${index}`, entity(`id${index}`));
+    // X inserts at the end of the article and saves what it did by itself.
+    mount(new EditorState(new ContentState(state.content.blocks.set(key, new Block(key, ' ', `entity${index}`)), entities)));
+    saved = state;
+    if (rebuild === 'renumber') setTimeout(() => setTimeout(renumber, 5), 5);
+  }
+  mount(state);
+  const sandbox = {
+    File, Uint8Array, atob,
+    setTimeout: (fn, ms) => setTimeout(fn, Math.min(ms, 5)), clearTimeout,
+    console: { log() {}, warn() {}, error() {} },
+    location: { href: 'https://x.com/compose/articles/edit/123' },
+    document: { querySelectorAll: () => [editor], cookie: '' },
+    DataTransfer: class { setData() {} },
+    ClipboardEvent: class { constructor(type, options) { Object.assign(this, options); } },
+    window: {
+      addEventListener() {}, removeEventListener() {},
+      postMessage: value => {
+        messages.push(value);
+        if (value.kind === 'progress' && value.text === 'Cleaning up import markers...') cleaning = true;
+      }
+    },
+    fetch: async () => {
+      if (rebuild === 'saved-copy') mount(saved);
+      if (rebuild === 'drop-media') mount(new EditorState(new ContentState(saved.content.blocks.delete('media1'), saved.content.entities)));
+      return { ok: true, status: 200, text: async () => JSON.stringify({ data: { ok: true } }) };
+    }
+  };
+  const source = fs.readFileSync(process.env.XPOSTER_MAIN_SOURCE || require.resolve('../src/main-world.js'), 'utf8');
+  vm.runInNewContext(source.replace(/\}\)\(\);\s*$/, 'window.testRunFlow = runFlow; })();'), sandbox);
+  const imageOp = (marker, source) => ({ marker, op: { type: 'image', source, file: { base64: 'eA==', fileName: 'figure.png', mime: 'image/png' } } });
+  await sandbox.window.testRunFlow({
+    blocks: texts.map(text => ({ type: 'unstyled', text, inlineStyleRanges: [], links: [] })),
+    html: '', plain: '', markerPrefix: prefix, cover: './cover.png',
+    plan: [imageOp(markers[0], undefined), imageOp(markers[1], './cover.png')]
+  });
+  await new Promise(resolve => setTimeout(resolve, 30));
+  const summary = messages.findLast(message => message.kind === 'done').summary;
+  const remaining = [...state.content.blocks.items.values()];
+  const order = remaining.map(block => block.entity ? '[image]' : block.text);
+  assert.equal(summary.imgFail, 0);
+  assert.equal(uploads, 2, 'nothing is uploaded twice');
+  for (const paragraph of paragraphs) assert.equal(order.includes(paragraph), true, `${paragraph} is still there`);
+  assert.equal(order.filter(item => item === '[image]').length, 1, 'only the table image stays in the body; the other is the cover');
+  assert.equal(order.indexOf('[image]'), order.indexOf('Paragraph 3') + 1, 'the table image sits at its placeholder');
+  assert.equal(order[order.indexOf('[image]') + 1], 'Paragraph 4');
+  assert.equal(order.some(item => item.startsWith(prefix)), false, 'no placeholder remains');
+  assert.equal(summary.markersLeft, 0);
+  assert.equal(summary.cover.bodyBlockDeleted.ok, true);
+  if (rebuild === 'drop-media') assert.equal(summary.recreatedImages, 1, 'a dropped image is rebuilt from its upload data');
+}
+
 (async () => {
   for (const [name, options] of [
     ['async editor commits do not restore removed cover', {}],
@@ -252,4 +356,11 @@ async function runReplacedScenario({ replace = 'after-upload', stuck = false, im
     ['restore article when X replaces it between uploads', { replace: 'before-upload' }],
     ['report a body X will not let us restore', { stuck: true, images: 1 }]
   ]) { await runReplacedScenario(options); console.log(`PASS ${name}`); }
+  for (const [name, options] of [
+    ['keep images in place when X restores its saved copy after the cover call', { rebuild: 'saved-copy' }],
+    ['find images by media ID after X renumbers entity keys', { rebuild: 'renumber' }],
+    ['do not mistake an earlier image for a new upload after entity keys change', { rebuild: 'renumber-before-insert' }],
+    ['rebuild an image the saved copy does not have', { rebuild: 'drop-media' }],
+    ['clean up again when the saved copy brings the placeholders back', { rebuild: 'late-placeholders' }]
+  ]) { await runLateRebuildScenario(options); console.log(`PASS ${name}`); }
 })().catch(error => { console.error(error); process.exitCode = 1; });

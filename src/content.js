@@ -282,6 +282,11 @@
         error.mainSummary = mainSummary;
         throw error;
       }
+      if (mainSummary?.markersLeft) {
+        const error = new Error(`${mainSummary.markersLeft} xPoster placeholder line(s) are still in the article (they start with __XPOSTER_). Delete them in X before publishing.`);
+        error.mainSummary = mainSummary;
+        throw error;
+      }
       if (mainSummary?.imgFail) {
         const error = new Error(`${mainSummary.imgFail} image upload(s) failed in X. Review the placeholders in the article, then retry after running Check.`);
         error.mainSummary = mainSummary;

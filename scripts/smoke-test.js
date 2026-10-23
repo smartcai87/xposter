@@ -68,6 +68,26 @@ assert.ok(counts.code >= 1, "fixture should include a code block");
 assert.ok(counts.divider >= 1, "fixture should include a divider");
 assert.ok(plan.html.includes("__XPOSTER_"), "paste plan should include replacement markers");
 
+const coverOf = (markdown) => shared.parseMarkdown(markdown).cover;
+assert.equal(coverOf("---\ncover: ./front.png\n---\n\nText\n\n![a](./body.png)"), "./front.png", "explicit cover wins");
+assert.equal(coverOf("# Title\n\n![cover](./cover.png)\n\nText"), "./cover.png", "image right under the title is the cover");
+assert.equal(
+  coverOf("---\ntitle: T\n---\n\n# T\n\n![cover](./cover.png)\n\nText"),
+  "./cover.png",
+  "image under a repeated title heading is the cover"
+);
+assert.equal(coverOf("![cover](./cover.png)\n\nText"), "./cover.png", "a leading image is the cover");
+assert.equal(
+  coverOf("# Title\n\nIntro paragraph.\n\n![figure](./figure.png)\n"),
+  null,
+  "an image below the opening text stays in the body"
+);
+assert.equal(
+  coverOf("# Title\n\n| a | b |\n|---|---|\n| 1 | 2 |\n\n![figure](./figure.png)"),
+  null,
+  "an image below a table stays in the body"
+);
+
 const readText = (relativePath) => fs.readFileSync(path.join(root, relativePath), "utf8");
 const readme = readText("README.md");
 const readmeZh = readText("README.zh-CN.md");

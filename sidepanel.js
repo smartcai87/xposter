@@ -630,7 +630,7 @@ console.log("示例代码块");
       Dividers: "分隔线",
       "Local vault": "本地图片文件夹",
       "Waiting for frontmatter or first H1.": "等待 frontmatter 或第一个 H1。",
-      "Waiting for frontmatter cover or first image.": "等待 frontmatter cover 或第一张图片。",
+      "Waiting for frontmatter cover or an image under the title.": "等待 frontmatter cover 或标题下的图片。",
       "Headings, paragraphs, lists, quotes, links, and inline styles.": "标题、段落、列表、引用、链接和行内样式。",
       "Prepared as files, then uploaded through X.": "准备为文件，然后通过 X 上传。",
       "Rendered as images before upload.": "上传前渲染为图片。",
@@ -1161,7 +1161,7 @@ console.log("示例代码块");
       "No title detected. Add frontmatter title or a first-level heading.": "未检测到标题。请添加 frontmatter title 或一级标题。",
       "Cover source matches an image in the article body.": "封面来源与正文中的图片匹配。",
       "Cover source is not also present as a body image; X cover assignment may be skipped.": "封面来源没有出现在正文图片中，X 可能跳过封面设置。",
-      "No cover candidate detected. Add frontmatter cover or a first image.": "未检测到封面候选项。请添加 frontmatter cover 或第一张图片。",
+      "No cover candidate detected. Add frontmatter cover or put an image right under the title.": "未检测到封面候选项。请添加 frontmatter cover，或把图片放在标题正下方。",
       "No media uploads required.": "无需上传媒体。",
       "Images or rendered tables need X upload handler.": "图片或渲染后的表格需要 X 上传能力。",
       "Run Check to lock the active X Article target.": "运行检查，确认当前 X 文章就是要导入的文章。",
@@ -1169,7 +1169,7 @@ console.log("示例代码块");
       "Add frontmatter title or a first H1.": "请添加 frontmatter title 或第一个一级标题。",
       "Will match the uploaded image and assign it as cover when article id is available.": "导入时会尽量把匹配的图片设为封面。",
       "Cover source has no matching body image; cover assignment may be skipped.": "封面来源没有匹配的正文图片，可能会跳过封面设置。",
-      "Add frontmatter cover or a first image.": "请添加 frontmatter cover 或第一张图片。",
+      "Add frontmatter cover or put an image right under the title.": "请添加 frontmatter cover，或把图片放在标题正下方。",
       "Will paste as structured HTML before marker replacement.": "会先写入正文，再放置图片、推文和代码。",
       "No text blocks detected.": "未检测到文本块。",
       "Prepared images can use X upload handler.": "准备好的图片可使用 X 上传能力。",
@@ -2648,7 +2648,7 @@ console.log("示例代码块");
     if (empty) {
       return [
         ["title", "Title", "idle", "Waiting for frontmatter or first H1.", 0],
-        ["cover", "Cover", "idle", "Waiting for frontmatter cover or first image.", 0],
+        ["cover", "Cover", "idle", "Waiting for frontmatter cover or an image under the title.", 0],
         ["text", "Text", "idle", "Headings, paragraphs, lists, quotes, links, and inline styles.", 0],
         ["image", "Images", "idle", "Prepared as files, then uploaded through X.", 0],
         ["table", "Tables", "idle", "Rendered as images before upload.", 0],
@@ -2675,7 +2675,7 @@ console.log("示例代码块");
           ? coverInBody || parsed.cover.startsWith("data:")
             ? "Will use the matching uploaded image as the cover when possible."
             : "Cover source has no matching body image; cover assignment may be skipped."
-          : "Add frontmatter cover or a first image.",
+          : "Add frontmatter cover or put an image right under the title.",
         count: parsed.cover ? 1 : 0
       },
       {
@@ -2810,7 +2810,7 @@ console.log("示例代码块");
           : "Cover source is not also present as a body image; X cover assignment may be skipped."
       });
     } else {
-      notes.push({ tone: "warn", text: "No cover candidate detected. Add frontmatter cover or a first image." });
+      notes.push({ tone: "warn", text: "No cover candidate detected. Add frontmatter cover or put an image right under the title." });
     }
 
     if (absoluteLocalImages.length) {

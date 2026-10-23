@@ -97,8 +97,14 @@
       }
     }
 
+    // Without an explicit cover, an image placed right under the title is the
+    // cover. An image further down is a body image and stays where it is.
     if (!cover) {
-      cover = segments.find((segment) => segment.type === "image" && segment.source)?.source || null;
+      const firstImage = segments.findIndex((segment) => segment.type === "image" && segment.source);
+      const onlyTitleAbove = segments
+        .slice(0, Math.max(firstImage, 0))
+        .every((segment) => segment.type === "text" && segment.kind === "header-one");
+      if (firstImage >= 0 && onlyTitleAbove) cover = segments[firstImage].source;
     }
 
     return {
