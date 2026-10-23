@@ -276,6 +276,12 @@
 
       showStatus("Writing into X editor...", "work");
       const mainSummary = await runMain(pastePlan, filePayloads);
+      if (mainSummary?.bodyLost) {
+        const { actual, expected } = mainSummary.body || {};
+        const error = new Error(`X replaced the article body while the import was running (${actual} of ${expected} paragraphs are left). Clear the draft in X, then click Publish again.`);
+        error.mainSummary = mainSummary;
+        throw error;
+      }
       if (mainSummary?.imgFail) {
         const error = new Error(`${mainSummary.imgFail} image upload(s) failed in X. Review the placeholders in the article, then retry after running Check.`);
         error.mainSummary = mainSummary;

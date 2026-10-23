@@ -112,6 +112,10 @@ Click allow if you trust the image host. xPoster needs the file bytes so it can 
 
 Choose the folder that contains those image files. Relative paths like `./images/photo.png` only work after xPoster can read the matching local folder.
 
+### The article text disappeared while images were uploading
+
+Occasionally X swaps in an earlier version of the editor as an image finishes uploading, which drops the imported text. xPoster detects this and puts the article back by itself. If Publish still stops with "X replaced the article body", clear the draft in X, refresh the tab, and click **Publish** again. Use **Copy error** if it keeps happening: the copied report shows which upload triggered it.
+
 ### Import partially worked
 
 Do not publish yet. Use the saved record and diagnostics popup to understand which step failed, then retry from a clean X Article draft.

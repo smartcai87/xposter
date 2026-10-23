@@ -381,10 +381,104 @@
     return true;
   }
 
-  async function uploadImageAtMarker(draftNode, imageOperation, existingAtomicBlocks) {
+  async function waitUntil(check, timeoutMs, stepMs = 80) {
+    const deadline = Date.now() + timeoutMs;
+    while (Date.now() < deadline) {
+      if (check()) return true;
+      await sleep(stepMs);
+    }
+    return check();
+  }
+
+  function markersPresent(draftNode, markers) {
+    if (!draftNode) return false;
+    const contentState = draftNode.props.editorState.getCurrentContent();
+    return markers.every((marker) => Boolean(findMarkerBlock(contentState, marker)));
+  }
+
+  function textBlocks(contentState) {
+    const texts = [];
+    contentState.getBlockMap().forEach((block) => {
+      const text = (block.getText() || "").trim();
+      if (block.getType() !== "atomic" && text) texts.push(text);
+    });
+    return texts;
+  }
+
+  function countSurvivors(before, after) {
+    const pool = new Map();
+    for (const text of after) pool.set(text, (pool.get(text) || 0) + 1);
+    let kept = 0;
+    for (const text of before) {
+      const left = pool.get(text) || 0;
+      if (!left) continue;
+      pool.set(text, left - 1);
+      kept += 1;
+    }
+    return kept;
+  }
+
+  // An upload only adds blocks beside the caret. X has been seen to swap in an
+  // earlier editor state as an upload finishes (the draft was left as "x" plus
+  // the new media block), which drops the imported article. Most earlier text
+  // or a later placeholder missing afterwards means that happened.
+  function inspectBody(beforeTexts, contentState, ignoreMarker, laterMarkers) {
+    const expected = beforeTexts.filter((text) => text !== ignoreMarker);
+    const kept = countSurvivors(expected, textBlocks(contentState));
+    const markerLost = laterMarkers.some((marker) => !findMarkerBlock(contentState, marker));
+    return {
+      replaced: markerLost || (expected.length > 0 && kept * 2 < expected.length),
+      kept,
+      total: expected.length
+    };
+  }
+
+  function putBackContent(contentState, selectionKey) {
+    const node = findDraftStateNode();
+    if (!node) return false;
+    const editorState = node.props.editorState;
+    const EditorState = editorState.constructor;
+    const SelectionState = editorState.getSelection().constructor;
+    const selection = SelectionState.createEmpty(selectionKey || contentState.getBlockMap().last().getKey());
+    const nextContent = contentState.set("selectionBefore", selection).set("selectionAfter", selection);
+    node.props.onChange(EditorState.moveSelectionToEnd(EditorState.push(editorState, nextContent, "insert-fragment")));
+    return true;
+  }
+
+  // The upload itself worked (X has a media ID) but the article around it was
+  // replaced. Restore the article as it was before the upload and put the
+  // uploaded media where its placeholder was, so nothing is uploaded twice.
+  async function restoreArticleWithMedia(beforeContent, marker, markerKey, uploadedContent, uploaded) {
+    let data = {};
+    let mutability = "IMMUTABLE";
+    try {
+      const entity = uploadedContent.getEntity(uploaded.entityKey);
+      data = entity.getData() || {};
+      mutability = entity.getMutability?.() || mutability;
+      try { data = JSON.parse(JSON.stringify(data)); } catch {}
+    } catch (error) {
+      return { ok: false, error: `Uploaded media could not be read back: ${error?.message || error}` };
+    }
+    const node = findDraftStateNode();
+    if (!node) return { ok: false, error: "X editor disappeared while restoring the article" };
+    const placed = replaceMarkerWithAtomic(beforeContent, marker, "MEDIA", data, mutability, findDraftSampleBlock(node));
+    if (!placed.ok) return { ok: false, error: placed.error };
+    putBackContent(placed.contentState, markerKey);
+    const settled = await waitUntil(() => {
+      const block = findDraftStateNode()?.props.editorState.getCurrentContent().getBlockMap().get(markerKey);
+      return block?.getType() === "atomic";
+    }, 2500);
+    if (!settled) return { ok: false, error: "The article could not be restored after X replaced it" };
+    return { ok: true, entityKey: placed.entityKey, blockKey: markerKey, mediaId: uploaded.mediaId };
+  }
+
+  async function uploadImageAtMarker(draftNode, imageOperation, existingAtomicBlocks, laterMarkers = []) {
     const onFilesAdded = findOnFilesAdded();
     if (!onFilesAdded) return { ok: false, error: "X upload handler was not reachable" };
 
+    const beforeContent = draftNode.props.editorState.getCurrentContent();
+    const beforeTexts = textBlocks(beforeContent);
+    const markerKey = findMarkerBlock(beforeContent, imageOperation.marker);
     if (!placeSelectionAtMarker(draftNode, imageOperation.marker)) {
       return { ok: false, error: "Image placeholder was not found in the X editor" };
     }
@@ -423,6 +517,16 @@
         );
       });
       if (found) {
+        const body = inspectBody(beforeTexts, contentState, imageOperation.marker, laterMarkers);
+        if (body.replaced) {
+          console.warn(LOG, "X replaced the article during an upload; restoring it", body);
+          progress("X replaced the article during the upload. Putting it back...", "warn");
+          const restored = await restoreArticleWithMedia(beforeContent, imageOperation.marker, markerKey, contentState, found);
+          if (!restored.ok) return restored;
+          found = restored;
+          existingAtomicBlocks.add(found.blockKey);
+          return { ok: true, ...found, restored: { kept: body.kept, total: body.total } };
+        }
         existingAtomicBlocks.add(found.blockKey);
         return { ok: true, ...found };
       }
@@ -559,6 +663,21 @@
     nextEditorState = EditorState.moveSelectionToEnd(nextEditorState);
     draftNode.props.onChange(nextEditorState);
     return toDelete.length;
+  }
+
+  // Imported text blocks the editor should hold versus the ones it holds now.
+  function importedBodyStats(draftNode, payload) {
+    const prefix = payload.markerPrefix || "";
+    const isContent = (text) => Boolean(text) && !(prefix && text.startsWith(prefix));
+    const expected = (payload.blocks || []).filter((block) => isContent(String(block?.text || "").trim())).length;
+    let actual = 0;
+    draftNode.props.editorState
+      .getCurrentContent()
+      .getBlockMap()
+      .forEach((block) => {
+        if (block.getType() !== "atomic" && isContent((block.getText() || "").trim())) actual += 1;
+      });
+    return { expected, actual };
   }
 
   function kickRender(draftNode) {
@@ -775,6 +894,9 @@
       imageErrors: [],
       markersCleaned: 0,
       relocatedImages: 0,
+      bodyRestores: [],
+      body: null,
+      bodyLost: false,
       title: {
         requested: Boolean(payload.title),
         value: payload.title || null,
@@ -815,17 +937,34 @@
         if (block.getType() === "atomic") protectedAtomicBlocks.add(key);
       });
 
+    // Last editor content known to hold the whole article, used to put it back
+    // if X swaps in an earlier editor state between uploads.
+    let knownGood = markersPresent(draftNode, imageOps.map((item) => item.marker))
+      ? draftNode.props.editorState.getCurrentContent()
+      : null;
     const uploads = [];
     for (let index = 0; index < imageOps.length; index += 1) {
-      draftNode = findDraftStateNode() || draftNode;
       const op = imageOps[index];
+      const pendingMarkers = imageOps.slice(index).map((item) => item.marker);
+      const laterMarkers = pendingMarkers.slice(1);
       progress(`Uploading image ${index + 1}/${imageOps.length}...`);
-      let result = await uploadImageAtMarker(draftNode, op, protectedAtomicBlocks);
+      draftNode = findDraftStateNode() || draftNode;
+      if (knownGood && !markersPresent(draftNode, pendingMarkers) && putBackContent(knownGood)) {
+        console.warn(LOG, "article was replaced before upload", index + 1);
+        progress("X replaced the article. Putting it back...", "warn");
+        const ok = await waitUntil(() => markersPresent(findDraftStateNode(), pendingMarkers), 2500);
+        summary.bodyRestores.push({ stage: "before-upload", image: index + 1, ok });
+        draftNode = findDraftStateNode() || draftNode;
+      }
+      let result = await uploadImageAtMarker(draftNode, op, protectedAtomicBlocks, laterMarkers);
       if (!result.ok && /timed out/i.test(result.error || "")) {
         progress(`Retrying image ${index + 1}...`, "warn");
         await sleep(1400);
         draftNode = findDraftStateNode() || draftNode;
-        result = await uploadImageAtMarker(draftNode, op, protectedAtomicBlocks);
+        result = await uploadImageAtMarker(draftNode, op, protectedAtomicBlocks, laterMarkers);
+      }
+      if (result.restored) {
+        summary.bodyRestores.push({ stage: "after-upload", image: index + 1, ...result.restored });
       }
       if (result.ok) {
         summary.imgOk += 1;
@@ -845,10 +984,13 @@
           fileName: op.op.file?.fileName || null,
           error: result.error || "Image upload failed"
         });
+        // X may have swapped the editor instance during the failed upload.
+        draftNode = findDraftStateNode() || draftNode;
         replaceMarkerText(draftNode, op.marker, op.op.fallbackText || "[image upload failed]");
         console.warn(LOG, "image failed", result.error);
       }
       draftNode = findDraftStateNode() || draftNode;
+      if (markersPresent(draftNode, laterMarkers)) knownGood = draftNode.props.editorState.getCurrentContent();
     }
 
     if (uploads.length) {
@@ -915,6 +1057,10 @@
     draftNode = findDraftStateNode() || draftNode;
     kickRender(draftNode);
     await sleep(250);
+    draftNode = findDraftStateNode() || draftNode;
+    summary.body = importedBodyStats(draftNode, payload);
+    summary.bodyLost = summary.body.expected >= 4 && summary.body.actual * 2 < summary.body.expected;
+    if (summary.bodyLost) console.warn(LOG, "article body is missing after import", summary.body);
     post("done", { summary });
   }
 
