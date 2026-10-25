@@ -8,6 +8,7 @@ xPoster is designed as a local browser extension.
 
 - Markdown text you paste or load in the side panel.
 - The active X/Twitter tab URL and page state.
+- While importing, the name, timing and paragraph count of the article and upload requests X's page makes (nothing else from them), to know when X has finished saving, and the article as X has saved it, requested from your own signed-in X session, to check it matches the editor.
 - Local image files only after you choose a local folder.
 - Remote image files only after Chrome grants host permission for that image website.
 

@@ -218,7 +218,9 @@
         if (message.kind === "error") {
           clearTimeout(timeout);
           window.removeEventListener("message", listener);
-          reject(new Error(message.error || "X editor bridge failed"));
+          const error = new Error(message.error || "X editor bridge failed");
+          if (message.trace) error.mainSummary = { trace: message.trace };
+          reject(error);
         }
       };
       window.addEventListener("message", listener);
@@ -300,6 +302,11 @@
         error.mainSummary = mainSummary;
         throw error;
       }
+      if (mainSummary?.layout && !mainSummary.layout.ok) {
+        const error = new Error(`Some images are not where the Markdown puts them: ${mainSummary.layout.problems.slice(0, 3).join("; ")}. Review the draft in X before publishing it.`);
+        error.mainSummary = mainSummary;
+        throw error;
+      }
       const elapsedMs = Math.round(performance.now() - startedAt);
       const summary = {
         ok: true,
@@ -314,7 +321,14 @@
       };
       state.lastSummary = summary;
       broadcast({ type: "complete", summary });
-      showStatus(`Imported in ${(elapsedMs / 1000).toFixed(1)}s`, "done", 5000);
+      const unsaved = mainSummary?.saved?.final?.timedOut;
+      showStatus(
+        unsaved
+          ? `Imported in ${(elapsedMs / 1000).toFixed(1)}s, but X had not saved the finished article yet. Stay on this page a little longer, then refresh the draft and check it.`
+          : `Imported in ${(elapsedMs / 1000).toFixed(1)}s`,
+        unsaved ? "warn" : "done",
+        unsaved ? 15000 : 5000
+      );
       return { ok: true, summary };
     } catch (error) {
       const message = error?.message || String(error);

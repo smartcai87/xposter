@@ -1094,6 +1094,10 @@ console.log("示例代码块");
       "Uploading prepared images and rendered tables through X.": "正在通过 X 上传准备好的图片和渲染后的表格。",
       "Replacing marker paragraphs with media and atomic blocks.": "正在把图片、推文和代码放到正确位置。",
       "Applying article metadata after the body import.": "正文导入后正在设置标题和封面。",
+      "Removing the temporary placeholder lines.": "正在清理临时占位行。",
+      "Checking that X has saved the article as it should be.": "正在确认 X 已按预期保存文章。",
+      "Uploading prepared images and rendered tables through X, one at a time.": "正在通过 X 逐张上传准备好的图片和渲染后的表格。",
+      "Setting the title and cover.": "正在设置标题和封面。",
       "The import run reported completion.": "导入流程已报告完成。",
       "Live status received from the active X tab.": "已收到当前 X 标签页发来的实时状态。",
       "The active X tab reported a completed import.": "当前 X 标签页报告导入已完成。",
@@ -4438,10 +4442,12 @@ console.log("示例代码块");
 
   function progressDetailForStatus(text) {
     if (/prepar/i.test(text)) return "Preparing Markdown, images, and the X editor.";
+    if (/clean/i.test(text)) return "Removing the temporary placeholder lines.";
+    if (/save|checking the finished/i.test(text)) return "Checking that X has saved the article as it should be.";
+    if (/image \d+\/\d+|upload|placing/i.test(text)) return "Uploading prepared images and rendered tables through X, one at a time.";
+    if (/title|cover/i.test(text)) return "Setting the title and cover.";
     if (/writing|paste|structured/i.test(text)) return "Writing the article body into X.";
-    if (/upload/i.test(text)) return "Uploading prepared images and rendered tables through X.";
     if (/reorder|marker|special|insert/i.test(text)) return "Placing images, tweets, code, and dividers into the article.";
-    if (/title|cover/i.test(text)) return "Setting the title and cover after the body import.";
     if (/imported|complete/i.test(text)) return "The import run reported completion.";
     return text || "Live status received from the active X tab.";
   }
@@ -4450,12 +4456,15 @@ console.log("示例代码块");
     if (level === "done") return 100;
     if (level === "error") return 100;
     if (/prepar/i.test(text)) return 14;
-    if (/writing|paste/i.test(text)) return 46;
-    if (/special|insert|marker/i.test(text)) return 58;
-    if (/upload/i.test(text)) return 70;
-    if (/reorder/i.test(text)) return 82;
-    if (/title|cover/i.test(text)) return 90;
-    if (/cleanup/i.test(text)) return 94;
+    if (/clean/i.test(text)) return 94;
+    if (/checking the finished/i.test(text)) return 92;
+    const upload = text.match(/image (\d+)\/(\d+)/i);
+    if (upload) return 56 + Math.round((34 * (Number(upload[1]) - 1)) / Math.max(1, Number(upload[2])));
+    if (/cover/i.test(text)) return 60;
+    if (/save/i.test(text)) return 52;
+    if (/title/i.test(text)) return 24;
+    if (/special|insert/i.test(text)) return 46;
+    if (/writing|paste|pasting|structured/i.test(text)) return 40;
     return 18;
   }
 

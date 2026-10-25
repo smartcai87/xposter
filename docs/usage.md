@@ -116,7 +116,11 @@ Choose the folder that contains those image files. Relative paths like `./images
 
 ### The article text disappeared while images were uploading
 
-Occasionally X swaps in an earlier version of the editor as an image finishes uploading, which drops the imported text. xPoster detects this and puts the article back by itself. If Publish still stops with "X replaced the article body", clear the draft in X, refresh the tab, and click **Publish** again. Use **Copy error** if it keeps happening: the copied report shows which upload triggered it.
+Occasionally X swaps in an earlier version of the editor as an image finishes uploading, which drops the imported text. xPoster writes the title and text first, waits until X has saved them (it can only check that when the Markdown has a title), then uploads the images one at a time, and checks again after each one. If X still replaces the article, xPoster puts it back by itself. If Publish stops with "X replaced the article body", clear the draft in X, refresh the tab, and click **Publish** again. Use **Copy error** if it keeps happening: the copied report shows which upload triggered it.
+
+### Images are not where the Markdown puts them
+
+Each image is placed as soon as its upload succeeds, and at the end xPoster compares the finished article with the Markdown. If an image is still out of place, Publish stops with "Some images are not where the Markdown puts them" and names the image. Use **Copy error** and send the report: its `trace` lists what X did and when, which is what shows why the image moved.
 
 ### Import partially worked
 
