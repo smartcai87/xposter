@@ -405,7 +405,8 @@ function toRaw(content) {
 
 async function runNativeScenario({
   commitsBefore = 0, splitEmpty = false, serverRebuild = false, autosave = 'debounced', images = 3, firstIsCover = true, endAtCaret = false, failImage = 0, titleReload = 0,
-  commitDelay = 0, rekey = false, zombie = false, coverOnly = false, nudgeDamage = false, startTwice = false, swapAfter = 0
+  commitDelay = 0, rekey = false, zombie = false, coverOnly = false, nudgeDamage = false, startTwice = false, swapAfter = 0,
+  saveDelay = 1500, saveThrottle = 0, saveOnInsert = false, ignoreCall = 0, slowImage = 0, dupCopy = false, foreignCopy = false, lateStray = false
 } = {}) {
   const prefix = '__XPOSTER_TEST_';
   const markers = Array.from({ length: images }, (_, index) => `${prefix}IMAGE_${index}__`);
@@ -417,6 +418,7 @@ async function runNativeScenario({
     texts.push(...paragraphs.slice(images * 3));
   }
   let overlaps = 0;
+  let serverMissed = 0;
   let pendingCommits = 0;
   // X numbers its entities again from 1: in document order, or from the end.
   const rekeyByOrder = content => {
@@ -454,10 +456,22 @@ async function runNativeScenario({
   // Which image an upload is for: the caret sits on that image's placeholder.
   const markerOfUpload = index => uploadMarkers[index - 1];
   const uploadMarkers = [];
+  // X saves a moment after the first change, then at most once every
+  // saveThrottle ms: the copy can hold an image's placeholder for a while after
+  // the upload has ended. Without saveThrottle every change restarts the wait.
+  let lastSaveAt = -Infinity;
+  let saveScheduled = false;
   const scheduleSave = () => {
     if (autosave !== 'debounced') return;
+    if (saveThrottle) {
+      if (saveScheduled) return;
+      saveScheduled = true;
+      const wait = Math.max(saveDelay, lastSaveAt + saveThrottle - clock.Date.now());
+      clock.setTimeout(() => { server = state.content; lastSaveAt = clock.Date.now(); saveScheduled = false; }, wait);
+      return;
+    }
     clearTimeout(saveTimer);
-    saveTimer = clock.setTimeout(() => { server = state.content; }, 1500);
+    saveTimer = clock.setTimeout(() => { server = state.content; }, saveDelay);
   };
   function commit(next) {
     state = next;
@@ -483,9 +497,13 @@ async function runNativeScenario({
     return () => {
       const index = ++uploads;
       events.push(`upload${index}`);
+      // The image before this one has to be in X's copy with its media ID by now.
+      if (index >= 3 && !JSON.stringify(toRaw(server)).includes(mediaIdFor(index - 1))) serverMissed += 1;
       const entityKey = `entity${index}`;
       const media = new Block(`media${index}`, ' ', entityKey);
       uploadMarkers[index - 1] = bound.content.getBlockMap().get(bound.key)?.getText();
+      // X does not react to this call at all.
+      if (ignoreCall && index === ignoreCall) return;
       const entries = [];
       let placed = false;
       for (const [key, block] of blocksOf(bound.content)) {
@@ -500,6 +518,16 @@ async function runNativeScenario({
       const entities = new Map(bound.content.entities);
       entities.set(entityKey, entity(null));
       commit(new RichState(withBlocks(bound.content, entries, entities), bound.key));
+      // The upload that was given up on ends now, while this one is still loading.
+      if (lateStray && index === 3) clock.setTimeout(() => {
+        const entities = new Map(state.content.entities);
+        entities.set('strayEntity', entity(mediaIdFor(2)));
+        commit(new RichState(withBlocks(state.content, [...blocksOf(state.content), ['stray', new Block('stray', ' ', 'strayEntity')]], entities), state.key));
+      }, 300);
+      // X saves the article at once when an image block is added, and the end of
+      // the upload (its media ID) only with the next, slow, save.
+      if (saveOnInsert) server = state.content;
+      const slow = slowImage && markerOfUpload(index) === markers[slowImage - 1];
       clock.setTimeout(() => {
         // The upload of this image never completes: X keeps its loading placeholder.
         if (failImage && markerOfUpload(index) === markers[failImage - 1]) return;
@@ -518,13 +546,21 @@ async function runNativeScenario({
           commit(new RichState(withBlocks(state.content, [['x', new Block('x', 'x')], [uploaded.key, uploaded]], state.content.entities), 'x'));
         }, swapAfter);
         if (rekey) clock.setTimeout(() => commit(new RichState(rekeyByOrder(state.content), state.key)), 150);
+        // X adds another block for the upload once it ends: the same image again,
+        // or one more (the late end of an upload that was given up on).
+        if (dupCopy || foreignCopy) clock.setTimeout(() => {
+          const entities = new Map(state.content.entities);
+          const copyKey = foreignCopy ? `late${index}` : entityKey;
+          if (foreignCopy) entities.set(copyKey, entity(mediaIdFor(80 + index)));
+          commit(new RichState(withBlocks(state.content, [...blocksOf(state.content), [`copy${index}`, new Block(`copy${index}`, ' ', copyKey)]], entities), state.key));
+        }, 100);
         // A copy taken in the middle of an upload brings its loading placeholder back.
         if (zombie && index === 2) clock.setTimeout(() => {
           const entities = new Map(state.content.entities);
           entities.set('zombieEntity', entity(null));
           commit(new RichState(withBlocks(state.content, [...blocksOf(state.content), ['zombie', new Block('zombie', ' ', 'zombieEntity')]], entities), state.key));
         }, 200);
-      }, 800);
+      }, slow ? 80000 : 800);
     };
   }
   commit(state);
@@ -597,12 +633,13 @@ async function runNativeScenario({
     expected.push(paragraph);
     if (index % 3 === 2 && index / 3 < images && !(firstIsCover && index === 2)) expected.push(failImage && index === failImage * 3 - 1 ? '[image upload failed]' : '[image]');
   });
-  return { summary, order, expected, events, uploads, server, state, overlaps, refused };
+  const finalIds = blocksOf(state.content).filter(([, block]) => block.entity).map(([, block]) => state.content.getEntity(block.entity).getData().mediaItems[0].mediaId);
+  return { summary, order, expected, events, uploads, server, state, overlaps, refused, serverMissed, finalIds };
 }
 
 const checkNative = (result, images, extra = {}) => {
   const { summary, order, expected, events, uploads } = result;
-  assert.equal(uploads, extra.failed ? images + 1 : images, extra.failed ? 'the failed image is tried twice, the others once' : 'every image uploads exactly once');
+  assert.equal(uploads, extra.calls ?? images, extra.failed ? 'an upload X is still working on is waited for, not started again' : 'every image uploads exactly once');
   assert.equal(summary.imgFail, extra.failed ? 1 : 0);
   assert.deepEqual(order, expected, 'every image sits after the paragraph its placeholder followed, with no placeholder or empty line left');
   assert.equal(summary.layout.ok, true, `layout check: ${summary.layout.problems}`);
@@ -619,6 +656,14 @@ const checkNative = (result, images, extra = {}) => {
   if (extra.restored) assert.ok(summary.bodyRestores.length > 0, 'the article had to be put back');
   if (extra.slowCommits) assert.equal(result.overlaps, 0, 'no edit was made before the one before it had committed');
   if (extra.noRecreate) assert.equal(summary.recreatedImages, 0, 'no image had to be rebuilt');
+  if (extra.noZombies) {
+    assert.equal(summary.recreatedImages, 0, 'no image had to be rebuilt');
+    assert.equal(summary.trace.some(line => /extra image block/.test(line)), false, 'X was never left with an image it had not finished');
+    assert.equal(summary.bodyRestores.length, 0);
+  }
+  if (extra.serverHasIds) assert.equal(result.serverMissed, 0, 'the next image was not started before X had the previous one with its media ID');
+  if (extra.finalIds) assert.deepEqual(result.finalIds, extra.finalIds, 'each place holds the image that was uploaded for it');
+  if (extra.removedExtras) assert.ok(summary.trace.some(line => /extra image block/.test(line)), 'the extra image was found and taken out');
   if (extra.nudgeOnce) assert.equal(summary.saved.nudges, 1, 'a prompt that damaged the article is not tried again');
   if (extra.refused) assert.ok(result.refused.length === 1 && /still running/.test(result.refused[0]), 'the second import is refused');
   if (extra.cover !== false) {
@@ -680,7 +725,8 @@ function runLayoutChecks() {
     ['key and value pairs', [{ key: '0', value: { type: 'MEDIA', data: [{ key: 'mediaItems', value: [[{ key: 'localMediaId', value: '1234567890123' }, { key: 'mediaId', value: '2000000000000000007' }]] }] } }]]
   ]) {
     const items = plain(sandbox.window.testServerItems(reply(map)));
-    assert.deepEqual(items, [{ kind: 'text', text: 'One' }, { kind: 'atomic', type: 'MEDIA', mediaId: '2000000000000000007' }], shape);
+    assert.ok(items[1].raw.includes('2000000000000000007'), `${shape}: the entity text is kept to look for the ID in`);
+    assert.deepEqual(items.map(({ raw, ...item }) => item), [{ kind: 'text', text: 'One' }, { kind: 'atomic', type: 'MEDIA', mediaId: '2000000000000000007' }], shape);
   }
   assert.equal(plain(sandbox.window.testServerItems({ data: { nothing: true } })), null, 'a reply without the article is not read');
   // The second image failed: its placeholder became a line of text, and that line
@@ -764,6 +810,12 @@ function runLayoutChecks() {
     ['remove a loading placeholder that comes back from an older copy', { zombie: true }, { native: true }],
     ['put the last paragraph back exactly when the edit that prompts a save damages it', { nudgeDamage: true, autosave: 'nudged' }, { nudgeOnce: true }],
     ['refuse a second import while one is running', { startTwice: true }, { refused: true }],
+    ['wait for the media ID to be in X\'s copy before going on, so a reload cannot bring back an unfinished image', { serverRebuild: true, saveDelay: 6000, saveOnInsert: true }, { noZombies: true, serverHasIds: true }],
+    ['leave alone the late end of an upload that was given up on while the next one loads', { failImage: 2, lateStray: true }, { failed: true, finalIds: [mediaIdFor(3)], removedExtras: true }],
+    ['wait for a slow upload instead of starting it again', { slowImage: 2 }, { native: true }],
+    ['ask again when X did not react to the upload call', { ignoreCall: 2 }, { calls: 4, native: true }],
+    ['take out a second block with the same image', { dupCopy: true }, { removedExtras: true }],
+    ['take out an image X adds when an abandoned upload ends', { foreignCopy: true }, { removedExtras: true }],
     ['never edit before the last edit has committed (slow commits)', { commitDelay: 200 }, { slowCommits: true, native: true }],
     ['never edit before the last edit has committed when X reloads a stale copy', { commitDelay: 200, serverRebuild: true, autosave: 'never' }, { slowCommits: true, restored: true }],
     ['never edit before the last edit has committed when the title reply reloads the editor', { commitDelay: 200, titleReload: 3000 }, { slowCommits: true, restored: true }],

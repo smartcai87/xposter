@@ -840,6 +840,27 @@
     return { ok: true, entityKey: placed.entityKey, blockKey: placed.blockKey, mediaId: uploaded.mediaId, ...media };
   }
 
+  // What X has added since the upload call: images with a new media ID, and
+  // loading blocks still waiting for theirs. Media IDs tell the images apart.
+  // Entity keys do not: X can number them again, so a new image may get a key an
+  // old one had.
+  function newMedia(contentState, known) {
+    const finished = [];
+    const loading = [];
+    contentState.getBlockMap().forEach((block, blockKey) => {
+      if (block.getType() !== "atomic") return;
+      const entity = blockEntity(contentState, block);
+      if (entity?.type !== "MEDIA" || known.pending.has(entity.key)) return;
+      const mediaId = mediaIdOfData(entity.data);
+      if (!mediaId) loading.push({ entityKey: entity.key, blockKey });
+      else if (!known.ids.has(mediaId)) finished.push({ entityKey: entity.key, blockKey, mediaId });
+    });
+    return { finished, loading };
+  }
+
+  const UPLOAD_PATIENCE_MS = 150000;
+  const UPLOAD_START_MS = 15000;
+
   async function uploadImageAtMarker(draftNode, imageOperation, existingAtomicBlocks, laterMarkers = [], seenMediaIds = new Set()) {
     const preparedFile = await requestPreparedFile(imageOperation);
     const file = base64ToFile(preparedFile.base64, preparedFile.fileName, preparedFile.mime);
@@ -864,39 +885,32 @@
         `${findPropFunction("onFilesAdded", false) === onFilesAdded ? "matches" : "differs from"} the one the DOM node reaches`
     );
 
-    const beforePending = pendingMediaEntities(draftNode.props.editorState.getCurrentContent());
-    const beforeIds = existingMediaIds(draftNode.props.editorState.getCurrentContent());
+    const contentAtCall = draftNode.props.editorState.getCurrentContent();
+    const beforePending = pendingMediaEntities(contentAtCall);
+    const beforeIds = existingMediaIds(contentAtCall);
 
     onFilesAdded([file]);
-    const deadline = Date.now() + 45000;
+    // A slow upload is waited for, never started again: a second upload of the
+    // same image is how a second copy ends up in the article when the first one
+    // finishes late.
+    const startedAt = Date.now();
+    const deadline = startedAt + UPLOAD_PATIENCE_MS;
+    let lastTick = startedAt;
+    let acted = false;
+    let placeholder = null;
     while (Date.now() < deadline) {
       await sleep(350);
       draftNode = findDraftStateNode() || draftNode;
       const contentState = draftNode.props.editorState.getCurrentContent();
-      let found = null;
-      contentState.getBlockMap().forEach((block, blockKey) => {
-        if (found || block.getType() !== "atomic") return;
-        block.findEntityRanges(
-          (character) => Boolean(character.getEntity()),
-          (start) => {
-            const entityKey = block.getCharacterList().get(start)?.getEntity?.();
-            if (!entityKey) return;
-            try {
-              const entity = contentState.getEntity(entityKey);
-              if (entity.getType() !== "MEDIA") return;
-              // A MEDIA block appears before its server-side media ID is ready.
-              // Wait for the ID so the same upload can also become the cover.
-              const mediaId = mediaIdOfData(entity.getData());
-              if (!mediaId) return;
-              // Media IDs tell the images apart. Entity keys do not: X can number
-              // them again, so a new image may get a key an old one had.
-              if (beforeIds.has(mediaId) || seenMediaIds.has(mediaId)) return;
-              if (beforePending.has(entityKey)) return;
-              found = { entityKey, blockKey, mediaId };
-            } catch {}
-          }
-        );
-      });
+      // A MEDIA block appears before its server-side media ID is ready. Wait for
+      // the ID so the same upload can also become the cover. The loading block
+      // this call made is the one to wait for: a finished image that is not it
+      // is the late end of an upload given up on earlier, and is left alone
+      // while ours is still loading.
+      const { finished, loading } = newMedia(contentState, { ids: new Set([...beforeIds, ...seenMediaIds]), pending: beforePending });
+      placeholder ||= loading[0] || null;
+      const stillLoading = Boolean(placeholder) && loading.some((item) => item.entityKey === placeholder.entityKey);
+      const found = (placeholder && finished.find((item) => item.entityKey === placeholder.entityKey)) || (stillLoading ? null : finished[0]) || null;
       if (found) {
         const body = inspectBody(beforeTexts, contentState, imageOperation.marker, laterMarkers);
         if (body.replaced) {
@@ -910,11 +924,88 @@
         existingAtomicBlocks.add(found.blockKey);
         return { ok: true, ...found, ...readMediaEntity(contentState, found.entityKey) };
       }
+      // Nothing in the editor changed at all: X did not take the call, so
+      // asking again cannot upload anything twice.
+      acted ||= contentState !== contentAtCall;
+      if (!acted && Date.now() - startedAt > UPLOAD_START_MS) {
+        note("X did not react to the upload call");
+        return { ok: false, error: "X did not start the upload", retryable: true };
+      }
+      if (Date.now() - lastTick >= 10000) {
+        lastTick = Date.now();
+        progress(`Waiting for X to finish uploading (${Math.round((Date.now() - startedAt) / 1000)}s)...`);
+      }
     }
 
     const dropped = await removePendingMedia(beforePending);
-    note(`upload timed out${dropped ? `; removed ${dropped} unfinished image placeholder(s)` : ""}`);
+    note(`upload timed out after ${Math.round((Date.now() - startedAt) / 1000)}s${dropped ? `; removed ${dropped} unfinished image placeholder(s)` : ""}`);
     return { ok: false, error: "Timed out waiting for X media upload" };
+  }
+
+  // The images in the article now: their media IDs, and the blocks of the ones
+  // without an ID yet.
+  function snapshotMedia(contentState) {
+    const ids = new Set();
+    const pending = new Set();
+    contentState.getBlockMap().forEach((block, key) => {
+      if (block.getType() !== "atomic") return;
+      const entity = blockEntity(contentState, block);
+      if (entity?.type !== "MEDIA") return;
+      const id = mediaIdOfData(entity.data);
+      if (id) ids.add(id);
+      else pending.add(key);
+    });
+    return { ids, pending };
+  }
+
+  // The article started empty, so it should hold the images xPoster uploaded,
+  // once each, and no other image: no loading placeholder that came back from an
+  // older copy, no copy X added when a slow upload finished late, no image from
+  // an older copy that was already taken out (the cover). Of two blocks with the
+  // same media ID the one right before its placeholder stays.
+  function extraMediaBlocks(contentState, uploads, initial) {
+    const wanted = new Map(uploads.filter((upload) => !upload.dropped).map((upload) => [String(upload.mediaId), upload]));
+    const order = [];
+    contentState.getBlockMap().forEach((_block, key) => {
+      order.push(key);
+    });
+    const extras = [];
+    const groups = new Map();
+    contentState.getBlockMap().forEach((block, key) => {
+      if (block.getType() !== "atomic") return;
+      const entity = blockEntity(contentState, block);
+      if (entity?.type !== "MEDIA") return;
+      const id = mediaIdOfData(entity.data);
+      // Media that was in the article before the import started is not ours to remove.
+      if (id ? initial.ids.has(id) : initial.pending.has(key)) return;
+      if (!id) extras.push({ key, id, reason: "unfinished" });
+      else if (!wanted.has(id)) extras.push({ key, id, reason: "not uploaded by xPoster" });
+      else groups.set(id, [...(groups.get(id) || []), key]);
+    });
+    for (const [id, keys] of groups) {
+      if (keys.length < 2) continue;
+      const markerKey = findMarkerBlock(contentState, wanted.get(id).marker);
+      const above = markerKey ? order[order.indexOf(markerKey) - 1] : null;
+      const keeper = keys.includes(above) ? above : keys[0];
+      for (const key of keys) if (key !== keeper) extras.push({ key, id, reason: "second copy" });
+    }
+    return extras;
+  }
+
+  // Takes them out and returns once the editor has dropped them, so the next
+  // edit starts from there.
+  async function removeExtraMedia(uploads, initial) {
+    const node = findDraftStateNode();
+    if (!node) return [];
+    const extras = extraMediaBlocks(node.props.editorState.getCurrentContent(), uploads, initial);
+    if (!extras.length || !deleteBlocksByKey(node, extras.map((extra) => extra.key)).ok) return [];
+    await waitUntil(() => {
+      const latest = findDraftStateNode();
+      if (!latest) return true;
+      const blocks = latest.props.editorState.getCurrentContent().getBlockMap();
+      return extras.every((extra) => !blocks.has(extra.key));
+    }, 2000);
+    return extras;
   }
 
   // An upload that never got its media ID leaves a loading placeholder behind.
@@ -1180,7 +1271,7 @@
 
   // Where the images and embedded blocks sit compared with the Markdown: next to
   // the same lines of text, and in the same order.
-  function layoutReport(draftNode, payload, uploads, atomicOps, checkEmbedded, failedNotes = new Map()) {
+  function layoutReport(draftNode, payload, uploads, atomicOps, checkEmbedded, failedNotes = new Map(), initialIds = new Set()) {
     const norm = (text) => String(text || "").replace(/\s+/g, " ").trim();
     const prefix = payload.markerPrefix || "";
     const markerSet = new Set((payload.plan || []).map((item) => item.marker));
@@ -1254,7 +1345,7 @@
     for (const [id, count] of counts) {
       const upload = shown.find((candidate) => candidate.mediaId === id);
       if (upload && count > 1) problems.push(`image ${upload.index} (${upload.label}) is in the article ${count} times`);
-      if (!ourIds.has(id)) problems.push(`the article has an image xPoster did not upload (media …${id.slice(-4)})`);
+      if (!ourIds.has(id) && !initialIds.has(id)) problems.push(`the article has an image xPoster did not upload (media …${id.slice(-4)})`);
     }
     const unfinished = actual.filter((item) => item.unfinished).length;
     if (unfinished) problems.push(`the article has ${unfinished} unfinished image placeholder(s)`);
@@ -1423,7 +1514,7 @@
         const range = (block.entityRanges || block.entity_ranges || [])[0];
         const entity = range ? serverEntity(entityMap, range.key) : null;
         const type = String(entity?.type ?? entity?.value?.type ?? "").toUpperCase() || (/media/i.test(JSON.stringify(entity || "")) ? "MEDIA" : "");
-        items.push({ kind: "atomic", type, mediaId: type === "MEDIA" ? findMediaId(entity) : "" });
+        items.push({ kind: "atomic", type, mediaId: type === "MEDIA" ? findMediaId(entity) : "", raw: type === "MEDIA" ? JSON.stringify(entity || "") : "" });
         continue;
       }
       const text = String(block?.text || "").replace(/\s+/g, " ").trim();
@@ -1463,6 +1554,12 @@
       if (mine.kind !== "atomic") continue;
       if (mine.type && theirs.type && (mine.type === "MEDIA") !== (theirs.type === "MEDIA")) {
         return { ok: false, reason: `item ${index + 1} is ${mine.type} here, ${theirs.type} there` };
+      }
+      // X saves an image's placeholder as soon as it appears, long before the
+      // upload ends. A copy reloaded from that one has an image that never
+      // finishes, so the media ID has to be in X's copy before we go on.
+      if (mine.mediaId && theirs.raw && !theirs.raw.includes(mine.mediaId)) {
+        return { ok: false, reason: `X's copy of the image at item ${index + 1} does not have its media ID yet` };
       }
       if (mine.mediaId && theirs.mediaId && mine.mediaId !== theirs.mediaId) {
         return { ok: false, reason: `image at item ${index + 1} differs (…${mine.mediaId.slice(-4)} here, …${theirs.mediaId.slice(-4)} there)` };
@@ -1839,6 +1936,7 @@
       const articleTexts = textBlocks(draftNode.props.editorState.getCurrentContent()).filter(
         (text) => !text.startsWith(markerPrefix)
       );
+      const initialMedia = snapshotMedia(draftNode.props.editorState.getCurrentContent());
 
       const saved = articleId && payload.title
         ? { articleId, title: String(payload.title), off: false, failures: 0, timeouts: 0, matched: 0, nudges: 0, nudgeWorked: false, nudgeUseless: false }
@@ -1846,6 +1944,7 @@
 
       const uploads = [];
       const seenMediaIds = new Set();
+      let lateUploads = false;
       // pending: not uploaded yet, placed: uploaded and sitting before its
       // placeholder, failed: placeholder turned into a note, cover: used as the
       // cover and taken out of the body.
@@ -1895,11 +1994,12 @@
       // Bring the article back to what it should be after X has had its say:
       // the whole text, embedded blocks, images before their placeholders, and
       // the cover image out of the body. Returns true when something was fixed.
-      // Every edit waits for the one before to commit: editing from the state
-      // before a commit throws that commit away.
+      // It stops after the first edit and waits for that edit to commit: an edit
+      // made from the state before a commit throws that commit away, and X can
+      // change the article at any moment, so one kind of edit per look, and
+      // stabilize looks again once the editor has been quiet for a moment.
       const settleArticle = async () => {
         draftNode = findDraftStateNode() || draftNode;
-        let changed = false;
         if (knownGood) {
           const body = inspectBody(articleTexts, draftNode.props.editorState.getCurrentContent(), null, cleanedUp ? [] : neededMarkers());
           if (body.replaced && putBackContent(knownGood)) {
@@ -1908,31 +2008,26 @@
             progress("X replaced the article. Putting it back...", "warn");
             note(`the article was replaced (${body.kept}/${body.total} paragraphs left); putting it back`);
             await waitUntil(bodyIsWhole, 2500);
-            draftNode = findDraftStateNode() || draftNode;
-            changed = true;
+            return true;
           }
         }
-        const content = draftNode.props.editorState.getCurrentContent();
-        const reverted = atomicOps.filter((item) => findMarkerBlock(content, item.marker));
+        const reverted = atomicOps.filter((item) => findMarkerBlock(draftNode.props.editorState.getCurrentContent(), item.marker));
         if (reverted.length) {
           const result = insertAtomicBatch(draftNode, reverted);
           summary.atomicRestored += result.okCount;
           if (result.okCount) {
-            changed = true;
             await waitUntil(() => reverted.every((item) => markerGone(item.marker)()), 2500);
-            draftNode = findDraftStateNode() || draftNode;
+            return true;
           }
         }
         // A failed image's note is undone when X brings back a copy that still
         // has its placeholder line.
         for (const item of imageOps) {
           if (markerState.get(item.marker) !== "failed") continue;
-          draftNode = findDraftStateNode() || draftNode;
           if (!findMarkerBlock(draftNode.props.editorState.getCurrentContent(), item.marker)) continue;
           if (replaceMarkerText(draftNode, item.marker, failureNote(item))) {
-            changed = true;
             await waitUntil(markerGone(item.marker), 2000);
-            draftNode = findDraftStateNode() || draftNode;
+            return true;
           }
         }
         if (coverUpload) {
@@ -1941,41 +2036,37 @@
           if (removed.ok) {
             coverUpload.dropped = true;
             markerState.set(coverUpload.marker, "cover");
-            if (!removed.alreadyAbsent) changed = true;
+            if (!removed.alreadyAbsent) return true;
           } else {
             console.warn(LOG, "cover block cleanup failed", removed);
           }
           draftNode = findDraftStateNode() || draftNode;
           if (coverUpload.dropped && removeMarkerBlock(coverUpload.marker)) {
-            changed = true;
             await waitUntil(markerGone(coverUpload.marker), 2000);
-            draftNode = findDraftStateNode() || draftNode;
+            return true;
           }
-        }
-        // Nothing is uploading now, so an image without a media ID is a loading
-        // placeholder that came back from an older copy and will never finish.
-        const zombies = await removePendingMedia(new Set());
-        if (zombies) {
-          summary.tidied += zombies;
-          changed = true;
-          note(`removed ${zombies} unfinished image placeholder(s) that came back`);
-          draftNode = findDraftStateNode() || draftNode;
         }
         const placed = placeImages(draftNode, uploads, protectedAtomicBlocks);
         summary.relocatedImages += placed.moved;
         summary.recreatedImages += placed.created;
         if (placed.moved || placed.created) {
-          changed = true;
           await sleep(400);
-          draftNode = findDraftStateNode() || draftNode;
+          return true;
         }
-        return changed;
+        // Nothing is uploading now, so every other image block is an extra. This
+        // comes after placing: what was moved or rebuilt decides which block of a
+        // pair is the extra one.
+        const extras = await removeExtraMedia(uploads, initialMedia);
+        if (!extras.length) return false;
+        summary.tidied += extras.length;
+        note(`removed ${extras.length} extra image block(s): ${extras.map((extra) => `${extra.reason}${extra.id ? ` …${extra.id.slice(-4)}` : ""}`).join(", ")}`);
+        return true;
       };
 
       // Keep settling until X leaves the article alone for two looks in a row.
       const stabilize = async (label) => {
         let calm = 0;
-        for (let round = 0; round < 5 && calm < 2; round += 1) {
+        for (let round = 0; round < 8 && calm < 2; round += 1) {
           progress(`Placing ${label}...`);
           await waitForStable(5000, 600);
           if (await settleArticle()) {
@@ -2003,15 +2094,18 @@
         await ensureWhole(index + 1);
         const keep = neededMarkers().filter((marker) => marker !== op.marker);
         draftNode = findDraftStateNode() || draftNode;
+        const uploadStartedAt = Date.now();
         let result = await uploadImageAtMarker(draftNode, op, protectedAtomicBlocks, keep, seenMediaIds);
-        if (!result.ok && /timed out/i.test(result.error || "")) {
+        if (!result.ok && result.retryable) {
           progress(`Retrying image ${index + 1}...`, "warn");
-          note(`image ${index + 1}: timed out; trying again`);
+          note(`image ${index + 1}: ${result.error}; trying again`);
           await sleep(1400);
           await ensureWhole(index + 1);
           draftNode = findDraftStateNode() || draftNode;
           result = await uploadImageAtMarker(draftNode, op, protectedAtomicBlocks, keep, seenMediaIds);
         }
+        // An upload that took this long can still add a block when it ends.
+        if (Date.now() - uploadStartedAt > 40000 || (!result.ok && /timed out/i.test(result.error || ""))) lateUploads = true;
         if (result.restored) {
           summary.bodyRestores.push({ stage: "after-upload", image: index + 1, ...result.restored });
         }
@@ -2087,12 +2181,17 @@
       const articleIsFinal = () => {
         if (countBlocksStartingWith(draftNode, markerPrefix) > 0) return false;
         if (coverUpload && findUploadedMediaBlock(draftNode, coverUpload)) return false;
+        if (extraMediaBlocks(draftNode.props.editorState.getCurrentContent(), uploads, initialMedia).length) return false;
         return !(articleTexts.length && inspectBody(articleTexts, draftNode.props.editorState.getCurrentContent(), null, []).replaced);
       };
 
       let finalSave = null;
       if (hasMarkers) {
         progress("Checking the finished article...");
+        if (lateUploads) {
+          note("an upload was slow; waiting for anything it adds late");
+          await waitForStable(20000, 8000);
+        }
         await waitForStable(4000, 600);
       }
       for (let round = 0; round < (hasMarkers ? 3 : 1); round += 1) {
@@ -2132,7 +2231,7 @@
             .filter((item) => markerState.get(item.marker) === "failed")
             .map((item) => [item.marker, failureNote(item)])
         );
-        summary.layout = layoutReport(draftNode, payload, uploads, atomicOps, summary.atomicFail === 0, failedNotes);
+        summary.layout = layoutReport(draftNode, payload, uploads, atomicOps, summary.atomicFail === 0, failedNotes, initialMedia.ids);
         note(summary.layout.ok ? `layout: ${summary.layout.images} image(s) where the Markdown has them` : `layout: ${summary.layout.problems.join("; ")}`);
       }
       if (saved) {

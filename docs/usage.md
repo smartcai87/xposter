@@ -122,6 +122,10 @@ Occasionally X swaps in an earlier version of the editor as an image finishes up
 
 Each image is placed as soon as its upload succeeds, and at the end xPoster compares the finished article with the Markdown. If an image is still out of place, Publish stops with "Some images are not where the Markdown puts them" and names the image. Use **Copy error** and send the report: its `trace` lists what X did and when, which is what shows why the image moved.
 
+### An image appears twice
+
+When X finishes a slow upload late, or reloads an older copy of the article, it can add a second block for an image xPoster has already placed. xPoster waits for a slow upload instead of uploading it again, makes sure X has saved each image with its media ID before it goes on, and takes out any extra image block, so no copy should survive the import. If you still see one, delete it in X and use **Copy error** or copy the evidence package: its `trace` says whether xPoster found and removed extra image blocks, and when they appeared.
+
 ### Import partially worked
 
 Do not publish yet. Use the saved record and diagnostics popup to understand which step failed, then retry from a clean X Article draft.
