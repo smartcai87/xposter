@@ -52,7 +52,7 @@ Use the source install only if you want to inspect or modify the extension yours
 | Markdown input | What xPoster does |
 | --- | --- |
 | `--- title: My title ---` | Uses frontmatter as the X Article title when possible. |
-| `# Heading` | Uses the first H1 as title if frontmatter has no title. |
+| `# Heading` | Uses the first H1 as title if frontmatter has no title. If it repeats the frontmatter title, it is left out of the body. |
 | Paragraphs, lists, quotes | Converts them into rich text for the editor. |
 | `**bold**`, `*italic*`, `` `code` ``, links | Keeps inline formatting where X accepts it. |
 | `![alt](image.png)` | Uploads supported images when xPoster can read the file. |

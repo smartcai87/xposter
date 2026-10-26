@@ -63,6 +63,16 @@
     return { body: normalized.slice(match[0].length).trim(), meta };
   }
 
+  // The same heading give or take spacing, or a short form of it: a title that
+  // adds a translation in brackets is still the heading above it.
+  function repeatsTitle(heading, title) {
+    const squash = (text) => String(text || "").replace(/[\s\u3000]+/g, "").toLowerCase();
+    const a = squash(heading);
+    const b = squash(title);
+    if (!a || !b) return false;
+    return a === b || (Math.min(a.length, b.length) >= 6 && (a.startsWith(b) || b.startsWith(a)));
+  }
+
   function parseMarkdown(markdown) {
     const { body, meta } = parseFrontmatter(markdown);
     const titleFromMeta = meta.title || meta.Title || meta["标题"] || null;
@@ -87,14 +97,22 @@
     if (cursor < body.length) segments.push(...parseTextBlocks(body.slice(cursor)));
 
     let title = titleFromMeta;
+    const firstHeading = segments.findIndex(
+      (segment) => segment.type === "text" && segment.kind === "header-one"
+    );
     if (!title) {
-      const titleIndex = segments.findIndex(
-        (segment) => segment.type === "text" && segment.kind === "header-one"
-      );
-      if (titleIndex >= 0) {
-        title = segments[titleIndex].text || null;
-        segments.splice(titleIndex, 1);
+      if (firstHeading >= 0) {
+        title = segments[firstHeading].text || null;
+        segments.splice(firstHeading, 1);
       }
+    } else if (
+      firstHeading >= 0 &&
+      segments.slice(0, firstHeading).every((segment) => segment.type === "image") &&
+      repeatsTitle(segments[firstHeading].text, title)
+    ) {
+      // X shows the title on its own, so the same heading at the top of the body
+      // would show it twice.
+      segments.splice(firstHeading, 1);
     }
 
     // Without an explicit cover, an image placed right under the title is the

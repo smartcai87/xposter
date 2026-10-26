@@ -58,7 +58,7 @@ xPoster 是一个把 Markdown 草稿导入 X Articles 的 Chrome 扩展。
 | Markdown 内容 | xPoster 会做什么 |
 | --- | --- |
 | `--- title: 标题 ---` | 尽量用 frontmatter 设置 X 文章标题。 |
-| `# 一级标题` | 没有 frontmatter 标题时，尽量用第一个 H1 当标题。 |
+| `# 一级标题` | 没有 frontmatter 标题时，尽量用第一个 H1 当标题；与 frontmatter 标题重复时不写进正文。 |
 | 段落、列表、引用 | 转成 X 编辑器能接受的正文。 |
 | `**加粗**`、`*斜体*`、`` `代码` ``、链接 | 尽量保留行内格式。 |
 | `![alt](image.png)` | 在能读取图片文件时上传图片。 |

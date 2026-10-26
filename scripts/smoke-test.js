@@ -88,6 +88,44 @@ assert.equal(
   "an image below a table stays in the body"
 );
 
+// X shows the title on its own, so a heading that repeats it stays out of the body.
+const bodyOf = (markdown) =>
+  shared.parseMarkdown(markdown).segments.map((segment) => (segment.type === "text" ? `${segment.kind}:${segment.text}` : segment.type));
+assert.deepEqual(bodyOf("---\ntitle: T Title\n---\n\n# T Title\n\nText"), ["unstyled:Text"], "a heading that repeats the title is left out");
+assert.deepEqual(
+  bodyOf("---\ntitle: Agent 高频题 05. 上下文太长\n---\n\n# Agent高频题05.上下文太长\n\nText"),
+  ["unstyled:Text"],
+  "spacing does not make it a different heading"
+);
+assert.deepEqual(
+  bodyOf("---\ntitle: Claude Fable 5.1 提示词指南（Prompting Claude Fable 5.1）\n---\n\n# Claude Fable 5.1 提示词指南\n\nText"),
+  ["unstyled:Text"],
+  "a title that adds a translation in brackets still repeats the heading"
+);
+assert.deepEqual(
+  bodyOf("---\ntitle: T Title\n---\n\n# T Title\n\n![cover](./cover.png)\n\nText"),
+  ["image", "unstyled:Text"],
+  "the cover stays when the repeated heading goes"
+);
+assert.deepEqual(
+  bodyOf("---\ntitle: T Title\n---\n\n# Another heading\n\nText"),
+  ["header-one:Another heading", "unstyled:Text"],
+  "a different heading stays in the body"
+);
+assert.deepEqual(
+  bodyOf("---\ntitle: T Title\n---\n\nIntro first.\n\n# T Title\n\nText"),
+  ["unstyled:Intro first.", "header-one:T Title", "unstyled:Text"],
+  "only the heading that opens the article is the title line"
+);
+assert.deepEqual(
+  bodyOf("---\ntitle: AI\n---\n\n# AI in practice\n\nText"),
+  ["header-one:AI in practice", "unstyled:Text"],
+  "a short title does not swallow a longer heading that starts with it"
+);
+const noMeta = shared.parseMarkdown("# Only Title\n\nText");
+assert.equal(noMeta.title, "Only Title", "without frontmatter the first heading is the title");
+assert.deepEqual(noMeta.segments.map((segment) => segment.text), ["Text"], "and it is not repeated in the body");
+
 const readText = (relativePath) => fs.readFileSync(path.join(root, relativePath), "utf8");
 const readme = readText("README.md");
 const readmeZh = readText("README.zh-CN.md");
