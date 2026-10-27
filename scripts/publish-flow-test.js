@@ -148,6 +148,37 @@ async function main() {
       assert.match(await page.evaluate(() => testCopied), /hasOnFilesAdded=false/);
       await page.screenshot({ path: '/tmp/xposter-publish-error.png' });
     });
+    await scenario('table image wraps long cells instead of squeezing the text', {}, async page => {
+      const drawn = await page.evaluate(async () => {
+        const proto = CanvasRenderingContext2D.prototype;
+        const original = proto.fillText;
+        const calls = [];
+        proto.fillText = function (text, x, y, ...rest) {
+          calls.push({ text, extraArguments: rest.length });
+          return original.call(this, text, x, y, ...rest);
+        };
+        try {
+          const question = '长期记忆用什么存储方案？为什么选 MongoDB，为什么用 Markdown？记忆里明文存用户原话吗？';
+          const cells = ['追问方向', '典型问法', '存哪、怎么存', question, '短', '短'];
+          const result = await xPosterShared.renderTableImage({
+            headers: cells.slice(0, 2), alignments: ['left', 'left'], rows: [cells.slice(2, 4), cells.slice(4)]
+          }, 'table.png');
+          const image = new Image();
+          image.src = `data:${result.mime};base64,${result.base64}`;
+          await image.decode();
+          return {
+            ok: result.ok, calls, width: image.naturalWidth, height: image.naturalHeight,
+            expected: cells.join('').replace(/\s/g, '')
+          };
+        } finally { proto.fillText = original; }
+      });
+      assert.equal(drawn.ok, true);
+      assert.ok(drawn.calls.every(call => call.extraArguments === 0), 'fillText gets no maxWidth, which would squeeze the glyphs');
+      assert.ok(drawn.calls.length > 6, 'the long cell is drawn on several lines');
+      assert.equal(drawn.calls.map(call => call.text).join('').replace(/\s/g, ''), drawn.expected);
+      assert.ok(drawn.width <= 680, `the table image stays within 680px (${drawn.width})`);
+      assert.ok(drawn.height > 42 * 3, 'the row that wraps is taller than a row of one line');
+    });
     await scenario('bridge timeout is shown', { timeout: true }, async page => {
       await fill(page); await publish(page);
       assert.match(await page.locator('#publishErrorText').innerText(), /MAIN world bridge timeout/);

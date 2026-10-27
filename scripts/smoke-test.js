@@ -126,6 +126,51 @@ const noMeta = shared.parseMarkdown("# Only Title\n\nText");
 assert.equal(noMeta.title, "Only Title", "without frontmatter the first heading is the title");
 assert.deepEqual(noMeta.segments.map((segment) => segment.text), ["Text"], "and it is not repeated in the body");
 
+// A table image wraps text that does not fit a cell; the canvas squeezes any text it is given a maxWidth for.
+const inkWidth = (text) =>
+  Array.from(String(text)).reduce((sum, char) => sum + (/[　-鿿＀-￯]/.test(char) ? 14 : char === " " ? 4 : 7.5), 0);
+const closingMarks = new Set(Array.from("，。、；：？！）」』】”’…,.;:?!)"));
+const question = "Memory 你会怎么设计？你的 Agent 记忆怎么管理？coding agent 的记忆是怎么做的？";
+const recovery = "Checkpoint 保存了哪些内容？容器迁移或重启了，上下文怎么办？新会话直接复用旧会话有什么问题？";
+const wide = shared.layoutTable(
+  {
+    headers: ["追问方向", "作者", "典型问法"],
+    alignments: ["left", "left", "left"],
+    rows: [
+      ["整体怎么设计", "19", question],
+      ["状态持久化和会话恢复", "12", recovery]
+    ]
+  },
+  inkWidth
+);
+assert.ok(wide.width <= 680, `a wide table stays within the image width (${wide.width})`);
+assert.deepEqual(wide.widths.slice(0, 2), [188, 120], "short columns keep the width their text needs");
+wide.rows.forEach((row, rowIndex) =>
+  row.cells.forEach((lines, column) =>
+    lines.forEach((line) => {
+      assert.ok(inkWidth(line) <= wide.widths[column] - 48, `row ${rowIndex} column ${column}: "${line}" fits its cell`);
+      assert.ok(!closingMarks.has(Array.from(line)[0]), `"${line}" does not start with closing punctuation`);
+    })
+  )
+);
+const recoveryLines = wide.rows[2].cells[2];
+assert.ok(recoveryLines.length > 1, "a long cell wraps onto more lines");
+assert.equal(recoveryLines.join("").replace(/\s/g, ""), recovery.replace(/\s/g, ""), "wrapping loses no text");
+assert.equal(wide.rows[2].height, recoveryLines.length * 20 + 22, "the row grows to fit its lines");
+const small = shared.layoutTable({ headers: ["A", "B"], alignments: ["left", "left"], rows: [["1", "2"]] }, inkWidth);
+assert.deepEqual(small.widths, [120, 120], "a small table keeps its column widths");
+assert.deepEqual(small.rows.map((row) => row.height), [42, 42], "and rows of one line keep their height");
+
+const wrap = (text, width) => shared.wrapCellText(text, width, inkWidth);
+assert.deepEqual(wrap("alpha beta gamma delta", 80), ["alpha beta", "gamma delta"], "words wrap at spaces");
+const link = "https://example.com/a/very/long/path/segment";
+const linkLines = wrap(link, 60);
+assert.ok(linkLines.length > 1 && linkLines.every((line) => inkWidth(line) <= 60), "a word wider than the cell breaks by characters");
+assert.equal(linkLines.join(""), link, "and keeps every character");
+assert.deepEqual(wrap("你好吗？好的", 42), ["你好", "吗？好", "的"], "closing punctuation does not start a line");
+assert.deepEqual(wrap("你好（世界）", 42), ["你好", "（世", "界）"], "an opening bracket does not end a line");
+assert.deepEqual(wrap("", 100), [""], "an empty cell is one empty line");
+
 const readText = (relativePath) => fs.readFileSync(path.join(root, relativePath), "utf8");
 const readme = readText("README.md");
 const readmeZh = readText("README.zh-CN.md");

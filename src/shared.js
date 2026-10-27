@@ -920,26 +920,153 @@
     }
   }
 
-  async function renderTableImage(table, fileName = `table-${Date.now()}.png`) {
-    const scale = Math.min(2, window.devicePixelRatio || 1);
-    const paddingX = 24;
-    const paddingY = 16;
-    const rowHeight = 42;
-    const minColumnWidth = 120;
-    const maxColumnWidth = 260;
-    const font = "14px ui-sans-serif, -apple-system, BlinkMacSystemFont, Segoe UI, sans-serif";
+  // Table images are drawn on a canvas, so the layout is worked out here: text
+  // that does not fit a cell wraps onto more lines. It is never given to
+  // fillText with a maxWidth, because the canvas answers that by squeezing the
+  // glyphs sideways.
+  const TABLE_FONT = "14px ui-sans-serif, -apple-system, BlinkMacSystemFont, Segoe UI, sans-serif";
+  const TABLE_HEADER_FONT = `600 ${TABLE_FONT}`;
+  const TABLE_LAYOUT = {
+    paddingX: 24,
+    paddingY: 11,
+    lineHeight: 20,
+    minColumnWidth: 120,
+    maxWordColumnWidth: 240,
+    maxTableWidth: 680
+  };
+  const MAX_TABLE_CANVAS_SIDE = 16384;
+  // A line may break after any CJK character or between words; a run of other
+  // characters (a Latin word, a number, a URL) stays together.
+  const CJK_RANGES =
+    "\\p{Script_Extensions=Han}\\p{Script=Hiragana}\\p{Script=Katakana}\\p{Script=Hangul}\\u3000-\\u303F\\uFF00-\\uFFEF";
+  const TABLE_TOKENS = new RegExp(`\\s+|[${CJK_RANGES}]|[^\\s${CJK_RANGES}]+`, "gu");
+  // Chinese typesetting: closing punctuation may not start a line, opening
+  // brackets may not end one.
+  const NO_LINE_START = new Set(Array.from("，。、．；：？！）］｝〕〉》」』】〗〙”’…‥,.;:?!)]}"));
+  const NO_LINE_END = new Set(Array.from("（［｛〔〈《「『【〖〘“‘"));
 
-    const measurer = document.createElement("canvas").getContext("2d");
-    measurer.font = font;
-    const columnCount = table.headers.length;
-    const widths = Array.from({ length: columnCount }, (_, index) => {
-      const values = [table.headers[index], ...table.rows.map((row) => row[index] || "")];
-      const measured = Math.max(...values.map((value) => measurer.measureText(String(value)).width + paddingX * 2));
-      return Math.max(minColumnWidth, Math.min(maxColumnWidth, Math.ceil(measured)));
+  function splitGraphemes(text) {
+    if (typeof Intl !== "undefined" && Intl.Segmenter) {
+      return Array.from(new Intl.Segmenter(undefined, { granularity: "grapheme" }).segment(text), (part) => part.segment);
+    }
+    return Array.from(text);
+  }
+
+  function wrapCellText(text, maxWidth, measure) {
+    const lines = [];
+    let line = [];
+    const render = (pieces) => pieces.map((piece, index) => (index && piece.gap ? " " : "") + piece.text).join("");
+    const fits = (pieces) => measure(render(pieces)) <= maxWidth;
+    const flush = () => {
+      lines.push(render(line));
+      line = [];
+    };
+
+    let gap = false;
+    for (const part of String(text).match(TABLE_TOKENS) || []) {
+      if (/^\s/.test(part)) {
+        gap = true;
+        continue;
+      }
+      const piece = { text: part, gap };
+      gap = false;
+      if (fits([...line, piece])) {
+        line.push(piece);
+        continue;
+      }
+
+      // Break before this piece. What may not start the next line, or end this
+      // one, moves down with it.
+      const carry = [];
+      const pull = () => carry.unshift(line.pop());
+      if (line.length > 1 && !piece.gap && NO_LINE_START.has(Array.from(piece.text)[0])) pull();
+      while (line.length > 1 && NO_LINE_END.has(Array.from(line[line.length - 1].text).pop())) pull();
+      if (line.length) flush();
+      line = carry;
+      if (fits([...line, piece])) {
+        line.push(piece);
+        continue;
+      }
+
+      // Wider than a whole line (a long URL, say): fill lines character by character.
+      splitGraphemes(piece.text).forEach((char, index) => {
+        const unit = { text: char, gap: index === 0 && piece.gap };
+        if (line.length && !fits([...line, unit])) flush();
+        line.push(unit);
+      });
+    }
+    if (line.length) flush();
+    return lines.length ? lines : [""];
+  }
+
+  // Columns keep the width their longest cell needs. When the table would be
+  // wider than the budget, the longest columns are capped at one shared width
+  // and their text wraps. A column never gets narrower than its longest word
+  // (or the minimum column width), and one that is already narrower than that
+  // keeps the width its text needs.
+  function fitColumnWidths(natural, floors, budget) {
+    const used = (cap) =>
+      natural.reduce((sum, value, index) => sum + Math.max(floors[index], Math.min(value, cap)), 0);
+    if (used(Infinity) <= budget) return natural.slice();
+    let low = 0;
+    let high = Math.max(...natural);
+    while (high - low > 1) {
+      const middle = Math.floor((low + high) / 2);
+      if (used(middle) <= budget) low = middle;
+      else high = middle;
+    }
+    return natural.map((value, index) => Math.max(floors[index], Math.min(value, low)));
+  }
+
+  // measure(text, bold) returns the drawn width of text in the table font.
+  function layoutTable(table, measure, options = {}) {
+    const config = { ...TABLE_LAYOUT, ...options };
+    const sheet = [table.headers, ...table.rows];
+    const natural = [];
+    const floors = [];
+    table.headers.forEach((_, column) => {
+      let widest = 0;
+      let longestWord = 0;
+      sheet.forEach((row, index) => {
+        const text = String(row[column] ?? "");
+        widest = Math.max(widest, measure(text, index === 0));
+        for (const part of text.match(TABLE_TOKENS) || []) {
+          if (!/^\s/.test(part)) longestWord = Math.max(longestWord, measure(part, index === 0));
+        }
+      });
+      const content = Math.ceil(widest + config.paddingX * 2);
+      natural.push(Math.max(config.minColumnWidth, content));
+      const wordWidth = Math.min(Math.ceil(longestWord + config.paddingX * 2), config.maxWordColumnWidth);
+      floors.push(Math.min(content, Math.max(config.minColumnWidth, wordWidth)));
     });
 
-    const width = widths.reduce((sum, value) => sum + value, 0);
-    const height = rowHeight * (table.rows.length + 1);
+    const widths = fitColumnWidths(natural, floors, config.maxTableWidth);
+    const rows = sheet.map((row, index) => {
+      const cells = widths.map((width, column) =>
+        wrapCellText(String(row[column] ?? ""), width - config.paddingX * 2, (value) => measure(value, index === 0))
+      );
+      const lines = Math.max(1, ...cells.map((cell) => cell.length));
+      return { cells, height: lines * config.lineHeight + config.paddingY * 2 };
+    });
+    return {
+      widths,
+      rows,
+      width: widths.reduce((sum, value) => sum + value, 0),
+      height: rows.reduce((sum, row) => sum + row.height, 0)
+    };
+  }
+
+  async function renderTableImage(table, fileName = `table-${Date.now()}.png`) {
+    const { paddingX, lineHeight } = TABLE_LAYOUT;
+    const measurer = document.createElement("canvas").getContext("2d");
+    const measure = (text, bold) => {
+      measurer.font = bold ? TABLE_HEADER_FONT : TABLE_FONT;
+      return measurer.measureText(text).width;
+    };
+    const { widths, rows, width, height } = layoutTable(table, measure);
+    if (Math.max(width, height) > MAX_TABLE_CANVAS_SIDE) throw new Error("Table is too large to render as one image");
+
+    const scale = Math.min(2, window.devicePixelRatio || 1, MAX_TABLE_CANVAS_SIDE / Math.max(width, height));
     const canvas = document.createElement("canvas");
     canvas.width = Math.ceil(width * scale);
     canvas.height = Math.ceil(height * scale);
@@ -949,22 +1076,17 @@
     ctx.scale(scale, scale);
     ctx.fillStyle = "#fbfaf7";
     ctx.fillRect(0, 0, width, height);
-    ctx.font = font;
     ctx.textBaseline = "middle";
 
-    let x = 0;
-    const drawCell = (text, column, row, isHeader) => {
-      const cellWidth = widths[column];
-      const y = row * rowHeight;
+    const drawCell = (lines, x, y, cellWidth, rowHeight, column, row) => {
+      const isHeader = row === 0;
       ctx.fillStyle = isHeader ? "#eeece6" : row % 2 ? "#fbfaf7" : "#f6f3ec";
       ctx.fillRect(x, y, cellWidth, rowHeight);
       ctx.strokeStyle = "#d8d2c6";
       ctx.lineWidth = 1;
       ctx.strokeRect(x + 0.5, y + 0.5, cellWidth, rowHeight);
       ctx.fillStyle = "#201f1b";
-      ctx.font = isHeader
-        ? "600 14px ui-sans-serif, -apple-system, BlinkMacSystemFont, Segoe UI, sans-serif"
-        : font;
+      ctx.font = isHeader ? TABLE_HEADER_FONT : TABLE_FONT;
       const alignment = table.alignments[column] || "left";
       let textX = x + paddingX;
       ctx.textAlign = "left";
@@ -975,16 +1097,19 @@
         textX = x + cellWidth - paddingX;
         ctx.textAlign = "right";
       }
-      ctx.fillText(String(text), textX, y + rowHeight / 2, cellWidth - paddingX * 2);
-      x += cellWidth;
+      const firstLineY = y + (rowHeight - lines.length * lineHeight) / 2 + lineHeight / 2;
+      lines.forEach((line, index) => ctx.fillText(line, textX, firstLineY + index * lineHeight));
     };
 
-    x = 0;
-    table.headers.forEach((header, column) => drawCell(header, column, 0, true));
-    for (let rowIndex = 0; rowIndex < table.rows.length; rowIndex += 1) {
-      x = 0;
-      table.rows[rowIndex].forEach((cell, column) => drawCell(cell, column, rowIndex + 1, false));
-    }
+    let y = 0;
+    rows.forEach((row, rowIndex) => {
+      let x = 0;
+      row.cells.forEach((lines, column) => {
+        drawCell(lines, x, y, widths[column], row.height, column, rowIndex);
+        x += widths[column];
+      });
+      y += row.height;
+    });
 
     const blob = await new Promise((resolve, reject) => {
       canvas.toBlob((value) => (value ? resolve(value) : reject(new Error("Could not render table"))), "image/png");
@@ -1013,6 +1138,8 @@
     parseDataUri,
     arrayBufferToBase64,
     renderTableImage,
+    layoutTable,
+    wrapCellText,
     saveVaultHandle,
     getVaultRecord,
     clearVaultHandle,

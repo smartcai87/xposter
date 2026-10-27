@@ -76,7 +76,7 @@ If local images use relative paths and no readable folder is configured, a dialo
 
 Leading `../` or `../../` is ignored when resolving local images. For `../40_Assets/cover.png`, select the parent of `40_Assets`. The Markdown is unchanged and file access stays inside the selected folder.
 
-Chrome asks for web image website access when needed. Downloads are checked automatically. Text-only drafts do not require a folder. Tables become images and still require X media uploads.
+Chrome asks for web image website access when needed. Downloads are checked automatically. Text-only drafts do not require a folder. Tables become images and still require X media uploads. Long cell text wraps onto more lines, so a wide table grows taller instead of squeezing its text.
 
 ## 7. Errors
 
